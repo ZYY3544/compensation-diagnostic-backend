@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: compensation-diagnostic-backend
+    runtime: python
+    repo: https://github.com/ZYY3544/compensation-diagnostic-backend
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:create_app() --bind 0.0.0.0:$PORT
+    envVars:
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: google/gemma-4-31b-it
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
