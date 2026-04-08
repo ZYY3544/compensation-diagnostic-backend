@@ -6,7 +6,7 @@ class BaseAgent:
 
     def __init__(self, temperature=0.3, model=None):
         self.api_key = os.getenv('OPENROUTER_API_KEY', '')
-        self.model = model or os.getenv('OPENROUTER_MODEL', 'google/gemma-4-31b-it')
+        self.model = model or os.getenv('OPENROUTER_MODEL', 'openai/gpt-5.4-mini')
         self.temperature = temperature
         self.base_url = 'https://openrouter.ai/api/v1/chat/completions'
 

@@ -10,7 +10,7 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
-        value: google/gemma-4-31b-it
+        value: openai/gpt-5.4-mini
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
