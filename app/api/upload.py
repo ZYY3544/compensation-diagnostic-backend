@@ -29,16 +29,19 @@ def upload_file(session_id):
     session['upload_file_path'] = file_path
 
     try:
-        # Parse real Excel file
-        result = parse_uploaded_file(file_path)
+        # Run full pipeline: parse → code checks → AI cleansing → grade match → func match
+        from app.services.pipeline import run_full_pipeline
+        result = run_full_pipeline(file_path, session)
         session['status'] = 'parsed'
         session['employee_count'] = result['employee_count']
         session['parse_result'] = result
         session['cleaned_employees'] = result.get('_employees', [])
         return jsonify(result), 200
     except Exception as e:
-        # Fallback to mock if parsing fails
-        print(f'Excel parsing failed: {e}, using mock data')
+        # Fallback to mock if pipeline fails
+        import traceback
+        print(f'Pipeline failed: {e}, using mock data')
+        traceback.print_exc()
         mock_result = get_mock_parse_result()
         session['status'] = 'parsed'
         session['employee_count'] = mock_result['employee_count']
