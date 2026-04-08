@@ -1,3 +1,4 @@
+import os
 from flask import Flask
 from flask_cors import CORS
 
@@ -5,7 +6,10 @@ def create_app():
     app = Flask(__name__)
     app.config.from_object('app.config.Config')
 
-    CORS(app, origins=['http://localhost:5173'])
+    CORS(app, origins=[
+        'http://localhost:5173',
+        'https://compensation-diagnostic-frontend.onrender.com',
+    ])
 
     # Register blueprints
     from app.api.sessions import sessions_bp
