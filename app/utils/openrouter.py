@@ -14,7 +14,7 @@ def call_openrouter(messages, model=None, temperature=0.3):
             'Content-Type': 'application/json',
         },
         json={
-            'model': model or os.getenv('OPENROUTER_MODEL', 'openai/gpt-4o-mini'),
+            'model': model or os.getenv('OPENROUTER_MODEL', 'google/gemma-4-31b-it'),
             'messages': messages,
             'temperature': temperature,
         },
