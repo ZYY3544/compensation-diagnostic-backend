@@ -359,34 +359,72 @@ def _build_corrections_from_code(code_results: dict | None) -> list:
 
 
 def _merge_ai_corrections(corrections: list, ai_results: dict, code_results: dict) -> list:
-    """把 AI 判断结果合并进 corrections"""
+    """把 AI 判断结果合并进 corrections，只保留自动修正项（不保留需用户确认的）"""
     judgments = ai_results.get('judgments', [])
     corr_id = max((c['id'] for c in corrections), default=0)
 
     for j in judgments:
+        # 只保留不需要用户确认的自动修正项
+        if j.get('needs_user_confirm', False):
+            continue
         action = j.get('action', '')
         if not action:
             continue
         corr_id += 1
-        desc = j.get('description', j.get('reasoning', action))
+        # 格式化成用户看得懂的描述
+        desc = _format_ai_judgment(j)
         corrections.append({
             'id': corr_id,
-            'description': f'[AI] {desc}',
+            'description': desc,
             'type': j.get('rule', 'ai_judgment'),
         })
 
     # 绩效映射
     perf_mapping = ai_results.get('performance_mapping')
-    if perf_mapping:
-        corr_id += 1
-        mapping_str = '、'.join(f'{k}->{v}' for k, v in perf_mapping.items()) if isinstance(perf_mapping, dict) else str(perf_mapping)
-        corrections.append({
-            'id': corr_id,
-            'description': f'[AI] 绩效等级标准化映射: {mapping_str}',
-            'type': 'performance_mapping',
-        })
+    if perf_mapping and isinstance(perf_mapping, dict):
+        detected = perf_mapping.get('detected_system', '')
+        mapping = perf_mapping.get('mapping', {})
+        confidence = perf_mapping.get('confidence', '')
+        if mapping:
+            corr_id += 1
+            # 格式化成人话
+            from_vals = list(mapping.keys())[:4]
+            to_vals = list(mapping.values())[:4]
+            from_str = '/'.join(str(v) for v in from_vals)
+            to_str = '/'.join(str(v) for v in to_vals)
+            corrections.append({
+                'id': corr_id,
+                'description': f'绩效等级已标准化（{from_str} → {to_str}）',
+                'type': 'performance_mapping',
+            })
 
     return corrections
+
+
+def _format_ai_judgment(judgment: dict) -> str:
+    """把 AI 判断结果格式化成用户看得懂的描述"""
+    rule = judgment.get('rule', '')
+    rows = judgment.get('rows', [])
+    action = judgment.get('action', '')
+    judgment_text = judgment.get('judgment', '')
+
+    rows_str = '、'.join(str(r) for r in rows[:5]) if rows else ''
+
+    if '年化' in rule or '年化' in action:
+        return f'第 {rows_str} 行年终奖已年化处理（AI 判断为按月折算而非保底奖金）'
+    elif '异常' in rule or '录入错误' in judgment_text:
+        return f'第 {rows_str} 行薪酬异常值已修正（AI 判断为录入错误）'
+    elif '13薪' in rule or '重复' in rule:
+        return f'第 {rows_str} 行年终奖中13薪部分已分离'
+    elif '长期激励' in rule or 'LTI' in rule.upper():
+        return f'第 {rows_str} 行年终奖中疑似长期激励部分已标记'
+    elif '部门' in rule:
+        return f'部门名称已归并标准化'
+    else:
+        # 通用格式
+        if judgment_text:
+            return f'{judgment_text}（涉及第 {rows_str} 行）' if rows_str else judgment_text
+        return action
 
 
 def _run_grade_matching(grades_list: list, employees: list, rows: list, field_map: dict, code_results: dict | None) -> list:
