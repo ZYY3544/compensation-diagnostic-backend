@@ -3,9 +3,9 @@ from flask import Blueprint, jsonify, request
 chat_bp = Blueprint('chat', __name__)
 
 
-@chat_bp.route('/<session_id>/message', methods=['POST'])
-def send_message(session_id):
-    """Send a message to Sparky and get a response"""
+@chat_bp.route('/<session_id>', methods=['POST'])
+def chat(session_id):
+    """Handle chat messages for a session"""
     from app.api.sessions import sessions_store
 
     session = sessions_store.get(session_id)
@@ -14,28 +14,23 @@ def send_message(session_id):
 
     data = request.json
     user_message = data.get('message', '')
-    stage = data.get('stage', 'chat')
-    conversation_history = data.get('history', [])
 
+    if not user_message:
+        return jsonify({'error': 'Message is required'}), 400
+
+    # Store conversation history
+    history = session.setdefault('chat_history', [])
+    history.append({'role': 'user', 'text': user_message})
+
+    # For MVP: use SparkyAgent if API key is available, otherwise return a placeholder
     try:
-        if stage == 'interview':
-            from app.agents.sparky_agent import SparkyAgent
-            agent = SparkyAgent()
-            context = session.get('parse_result', {})
-            response = agent.chat(user_message, context=context, conversation_history=conversation_history)
-        elif stage == 'report':
-            from app.agents.insight_agent import InsightChatAgent
-            agent = InsightChatAgent()
-            report_context = session.get('analysis_results', {})
-            response = agent.chat(user_message, report_context=report_context, conversation_history=conversation_history)
-        else:
-            from app.agents.sparky_agent import SparkyAgent
-            agent = SparkyAgent()
-            response = agent.chat(user_message, conversation_history=conversation_history)
-    except Exception as e:
-        response = f'抱歉，遇到了一些问题：{str(e)}'
+        from app.agents.sparky_agent import SparkyAgent
+        agent = SparkyAgent()
+        report_context = session.get('analysis_results', {})
+        response_text = agent.chat(user_message, context=report_context, conversation_history=history)
+    except Exception:
+        response_text = '目前暂时无法回答，请稍后再试。'
 
-    return jsonify({
-        'role': 'assistant',
-        'content': response,
-    })
+    history.append({'role': 'assistant', 'text': response_text})
+
+    return jsonify({'response': response_text})

@@ -36,6 +36,10 @@ def upload_file(session_id):
     session['employee_count'] = mock_result['employee_count']
     session['parse_result'] = mock_result
 
+    # Pre-populate mock employee data for analysis pipeline
+    from app.api.report import get_mock_employees
+    session['cleaned_employees'] = get_mock_employees()
+
     return jsonify(mock_result), 200
 
 

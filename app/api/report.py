@@ -1,6 +1,8 @@
 from flask import Blueprint, jsonify
+from app.services.market_data import lookup_market_salary
 
 report_bp = Blueprint('report', __name__)
+
 
 @report_bp.route('/<session_id>', methods=['GET'])
 def get_report(session_id):
@@ -11,8 +13,10 @@ def get_report(session_id):
     if not session:
         return jsonify({'error': 'Session not found'}), 404
 
-    # For MVP: return mock report data
-    return jsonify(get_mock_report())
+    report = session.get('analysis_results')
+    if not report:
+        return jsonify({'error': 'Analysis not complete'}), 400
+    return jsonify(report)
 
 
 @report_bp.route('/<session_id>/analyze', methods=['POST'])
@@ -26,113 +30,106 @@ def run_analysis(session_id):
 
     session['status'] = 'analyzing'
 
-    # For MVP: immediately set to done with mock data
+    # Get cleaned employee data (for MVP, use mock data if real data not available)
+    employees = session.get('cleaned_employees', get_mock_employees())
+    company_data = session.get('company_data')
+
+    # Run all analysis modules
+    from app.engine import external_competitiveness, internal_equity, pay_performance, fix_variable_ratio, labor_cost
+
+    ext_comp = external_competitiveness.analyze(employees, lookup_market_salary)
+    int_equity = internal_equity.analyze(employees)
+    pay_perf = pay_performance.analyze(employees)
+    fix_var = fix_variable_ratio.analyze(employees)
+    lab_cost = labor_cost.analyze(employees, company_data)
+
+    # Calculate health score
+    cr_values = [e.get('cr', 1.0) for e in employees if e.get('cr')]
+    avg_cr = sum(cr_values) / len(cr_values) if cr_values else 1.0
+    health_score = min(100, max(0, int(avg_cr * 70 + 30)))  # Simple formula
+
+    report = {
+        'health_score': health_score,
+        'key_findings': generate_key_findings(ext_comp, int_equity, pay_perf, lab_cost),
+        'modules': {
+            'external_competitiveness': {**ext_comp, 'status': 'warning' if avg_cr < 0.95 else 'normal'},
+            'internal_equity': {**int_equity, 'status': 'attention'},
+            'pay_performance': {**pay_perf, 'status': 'attention'},
+            'fix_variable_ratio': {**fix_var, 'status': 'normal'},
+            'labor_cost': {**lab_cost, 'status': 'warning' if company_data else 'unavailable'},
+        }
+    }
+
     session['status'] = 'report_done'
-    session['analysis_results'] = get_mock_report()
+    session['analysis_results'] = report
 
     return jsonify({'status': 'analyzing'}), 202
 
 
-def get_mock_report():
-    """Mock report data"""
-    return {
-        'health_score': 72,
-        'key_findings': [
-            {'severity': 'red', 'text': '销售 L4-L5 竞争力不足，CR 仅 0.84-0.88'},
-            {'severity': 'amber', 'text': 'L5 层级内部薪酬离散度偏高，离散系数 0.32'},
-            {'severity': 'amber', 'text': '绩效与薪酬关联偏弱，A vs C 差距仅 23%'},
-            {'severity': 'red', 'text': '人工成本增速（22%）高于营收增速（15%）'},
-        ],
-        'modules': {
-            'external_competitiveness': {
-                'status': 'warning',
-                'cr_by_function': [
-                    {'name': '研发', 'cr': 1.05},
-                    {'name': '产品', 'cr': 0.98},
-                    {'name': '销售', 'cr': 0.88},
-                    {'name': '人力资源', 'cr': 0.82},
-                    {'name': '行政', 'cr': 0.85},
-                ],
-                'cr_heatmap': {
-                    'departments': ['研发', '销售', '市场', '人力资源', '行政'],
-                    'grades': ['L3', 'L4', 'L5', 'L6', 'L7', 'L8'],
-                    'values': [
-                        [1.05, 1.07, 1.04, 1.02, 1.07, 1.03],
-                        [0.92, 0.97, 0.88, 0.84, 0.89, None],
-                        [0.95, 0.89, 0.91, 0.88, None, 0.90],
-                        [0.83, 0.82, 0.81, None, None, None],
-                        [0.89, 0.85, None, None, None, None],
-                    ]
-                },
-                'insight': '你提到销售团队流失严重，从数据来看确实如此——销售 L4-L5 的 CR 值仅 0.84-0.88，低于市场中位值 12-16%，薪酬竞争力不足很可能是流失的核心原因。',
-            },
-            'internal_equity': {
-                'status': 'attention',
-                'deviation_matrix': {
-                    'departments': ['研发', '销售', '市场', '人力资源', '行政'],
-                    'grades': ['L3', 'L4', 'L5', 'L6'],
-                    'values': [
-                        ['+8%', '+14%', '+12%', '+9%'],
-                        ['-5%', '+3%', '-8%', '-12%'],
-                        ['-2%', '-7%', '-4%', '-6%'],
-                        ['-12%', '-10%', '-15%', None],
-                        ['-8%', '-5%', None, None],
-                    ]
-                },
-                'dispersion': [
-                    {'grade': 'L3', 'coefficient': 0.18, 'range_ratio': 1.4, 'status': 'normal'},
-                    {'grade': 'L4', 'coefficient': 0.25, 'range_ratio': 1.8, 'status': 'normal'},
-                    {'grade': 'L5', 'coefficient': 0.32, 'range_ratio': 2.3, 'status': 'high'},
-                    {'grade': 'L6', 'coefficient': 0.22, 'range_ratio': 1.9, 'status': 'normal'},
-                    {'grade': 'L7', 'coefficient': 0.28, 'range_ratio': 1.7, 'status': 'normal'},
-                ],
-                'insight': 'L5 层级离散度偏高（离散系数 0.32，极差比 2.3），主要由研发与非研发岗薪酬差异导致。',
-            },
-            'pay_performance': {
-                'status': 'attention',
-                'cr_by_performance': [
-                    {'grade': 'A', 'cr': 1.12},
-                    {'grade': 'B+', 'cr': 1.05},
-                    {'grade': 'B', 'cr': 0.98},
-                    {'grade': 'B-', 'cr': 0.94},
-                    {'grade': 'C', 'cr': 0.91},
-                ],
-                'raise_by_performance': [
-                    {'grade': 'A', 'pct': 12},
-                    {'grade': 'B+', 'pct': 8},
-                    {'grade': 'B', 'pct': 6},
-                    {'grade': 'B-', 'pct': 3},
-                    {'grade': 'C', 'pct': 1},
-                ],
-                'insight': '你提到调薪预算 8% 按统一比例分配，这从数据上得到了印证——A 绩效 CR 1.12 vs C 绩效 CR 0.91，差距仅 23%。',
-            },
-            'fix_variable_ratio': {
-                'status': 'normal',
-                'pay_mix': [
-                    {'grade': 'L3', 'fixed': 72000, 'variable': 12000},
-                    {'grade': 'L4', 'fixed': 96000, 'variable': 18000},
-                    {'grade': 'L5', 'fixed': 132000, 'variable': 36000},
-                    {'grade': 'L6', 'fixed': 168000, 'variable': 60000},
-                    {'grade': 'L7', 'fixed': 216000, 'variable': 96000},
-                    {'grade': 'L8', 'fixed': 276000, 'variable': 156000},
-                ],
-                'insight': '整体呈合理梯度：越高职级浮动越多。但 L3-L4 浮动占比偏低（14-16%），市场通常 20%。',
-            },
-            'labor_cost': {
-                'status': 'warning',
-                'kpi': {
-                    'cost_revenue_ratio': {'value': 32, 'trend': 'up', 'label': '偏高'},
-                    'revenue_per_head': {'value': 68, 'trend': 'flat', 'label': '持平'},
-                    'profit_per_head': {'value': 12, 'trend': 'down', 'label': '偏低'},
-                    'cost_vs_revenue_growth': {'cost': 22, 'revenue': 15, 'label': '失衡'},
-                },
-                'trend': [
-                    {'year': '2022', 'cost': 1850},
-                    {'year': '2023', 'cost': 2340},
-                    {'year': '2024', 'cost': 2890},
-                    {'year': '2025', 'cost': 3250},
-                ],
-                'insight': '你提到明年的重点是降本增效，数据也显示这很紧迫——人工成本增速（22%）显著高于营收增速（15%）。',
-            },
-        }
+def generate_key_findings(ext_comp, int_equity, pay_perf, lab_cost):
+    findings = []
+
+    # Check CR by function
+    for f in ext_comp.get('cr_by_function', []):
+        if f['cr'] < 0.85:
+            findings.append({'severity': 'red', 'text': f"{f['name']}薪酬竞争力不足，CR 仅 {f['cr']}"})
+
+    # Check dispersion
+    for d in int_equity.get('dispersion', []):
+        if d['status'] == 'high':
+            findings.append({'severity': 'amber', 'text': f"{d['grade']} 层级内部薪酬离散度偏高，离散系数 {d['coefficient']}"})
+
+    # Check pay-performance
+    cr_by_perf = pay_perf.get('cr_by_performance', [])
+    if len(cr_by_perf) >= 2:
+        top_cr = cr_by_perf[0].get('cr', 1.0)
+        bottom_cr = cr_by_perf[-1].get('cr', 1.0)
+        if bottom_cr > 0:
+            gap = round((top_cr / bottom_cr - 1) * 100)
+            if gap < 30:
+                findings.append({'severity': 'amber', 'text': f'绩效与薪酬关联偏弱，最高与最低绩效薪酬差距仅 {gap}%'})
+
+    return findings[:4]  # Max 4 findings
+
+
+def get_mock_employees():
+    """Generate mock employee data for testing"""
+    import random
+    random.seed(42)
+
+    departments = ['研发部', '销售部', '市场部', '人力资源部', '行政部']
+    grades = ['Level2-1', 'Level2-2', 'Level3-1', 'Level3-2', 'Level4-1', 'Level4-2', 'Level5-1', 'Level5-2']
+    functions = ['招聘', '薪酬管理', 'HRBP', '绩效管理', '人才发展', '员工关系']
+    performances = ['A', 'B+', 'B', 'B-', 'C']
+
+    hay_map = {
+        'Level2-1': 10, 'Level2-2': 11, 'Level3-1': 12, 'Level3-2': 13,
+        'Level4-1': 14, 'Level4-2': 15, 'Level5-1': 16, 'Level5-2': 17,
     }
+    base_salary_map = {
+        'Level2-1': 7000, 'Level2-2': 8000, 'Level3-1': 10000, 'Level3-2': 12000,
+        'Level4-1': 15000, 'Level4-2': 18000, 'Level5-1': 22000, 'Level5-2': 26000,
+    }
+
+    employees = []
+    for i in range(80):
+        grade = random.choice(grades)
+        base = base_salary_map[grade]
+        # Add some variance
+        base = int(base * random.uniform(0.8, 1.25))
+        bonus = int(base * random.uniform(1.0, 3.0))
+
+        emp = {
+            'id': f'EMP{i + 1:03d}',
+            'department': random.choice(departments),
+            'grade': grade,
+            'hay_grade': hay_map[grade],
+            'job_function': random.choice(functions),
+            'base_monthly': base,
+            'annual_bonus': bonus,
+            'performance': random.choice(performances),
+            'cr': None,  # Will be calculated
+        }
+        employees.append(emp)
+
+    return employees
