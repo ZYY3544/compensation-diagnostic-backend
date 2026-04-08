@@ -48,15 +48,40 @@ def run_analysis(session_id):
     avg_cr = sum(cr_values) / len(cr_values) if cr_values else 1.0
     health_score = min(100, max(0, int(avg_cr * 70 + 30)))  # Simple formula
 
+    # Remap engine output keys to match frontend expectations
+    ext_comp_mapped = {
+        **ext_comp,
+        'heatmap': ext_comp.get('cr_heatmap'),  # frontend reads 'heatmap'
+        'status': 'warning' if avg_cr < 0.95 else 'normal',
+    }
+    int_equity_mapped = {
+        **int_equity,
+        'deviation': int_equity.get('deviation_matrix', {}).get('values', []),
+        'deviation_levels': int_equity.get('deviation_matrix', {}).get('grades', []),
+        'deviation_departments': int_equity.get('deviation_matrix', {}).get('departments', []),
+        'status': 'attention',
+    }
+    fix_var_mapped = {
+        **fix_var,
+        'ratio_by_grade': fix_var.get('pay_mix'),  # frontend reads 'ratio_by_grade'
+        'status': 'normal',
+    }
+    lab_cost_mapped = {
+        **lab_cost,
+        'metrics': lab_cost.get('kpi'),  # frontend reads 'metrics'
+        'cost_trend': lab_cost.get('trend'),  # frontend reads 'cost_trend'
+        'status': 'warning' if company_data else 'unavailable',
+    }
+
     report = {
         'health_score': health_score,
         'key_findings': generate_key_findings(ext_comp, int_equity, pay_perf, lab_cost),
         'modules': {
-            'external_competitiveness': {**ext_comp, 'status': 'warning' if avg_cr < 0.95 else 'normal'},
-            'internal_equity': {**int_equity, 'status': 'attention'},
+            'external_competitiveness': ext_comp_mapped,
+            'internal_equity': int_equity_mapped,
             'pay_performance': {**pay_perf, 'status': 'attention'},
-            'fix_variable_ratio': {**fix_var, 'status': 'normal'},
-            'labor_cost': {**lab_cost, 'status': 'warning' if company_data else 'unavailable'},
+            'fix_variable_ratio': fix_var_mapped,
+            'labor_cost': lab_cost_mapped,
         }
     }
 
