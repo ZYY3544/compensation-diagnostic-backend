@@ -51,18 +51,23 @@ def extract_interview_answer(session_id):
     user_answer = data.get('answer', '')
     question_id = data.get('question_id', '')  # Q1-Q6
     question_text = data.get('question_text', '')
+    context = data.get('context', '')  # 之前的访谈上下文
 
     if not user_answer:
         return jsonify({'error': 'Answer is required'}), 400
 
     try:
         from app.agents.base_agent import BaseAgent
-        agent = BaseAgent(temperature=0.1)
+        agent = BaseAgent(temperature=0.3)
         system_prompt = agent.load_prompt('interview_extract.txt')
+
+        user_content = f"问题编号：{question_id}\n问题内容：{question_text}\n用户回答：{user_answer}"
+        if context:
+            user_content += f"\n\n之前的访谈上下文：\n{context}"
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"问题编号：{question_id}\n问题内容：{question_text}\n用户回答：{user_answer}"}
+            {"role": "user", "content": user_content}
         ]
 
         response = agent.call_llm(messages)
@@ -76,15 +81,19 @@ def extract_interview_answer(session_id):
         result = json.loads(response.strip())
 
         return jsonify({
-            'extracted': result.get('extracted', {}),
+            'extracted': result.get('extracted', []),
             'reply': result.get('reply', '好的，了解了。'),
+            'follow_up': result.get('follow_up', False),
         })
     except Exception as e:
         print(f'Extract failed: {e}')
+        import traceback
+        traceback.print_exc()
         # Fallback: use raw answer as value
         return jsonify({
-            'extracted': {'field_name': question_id, 'value': user_answer},
+            'extracted': [{'field_name': question_id.lower().replace('q', 'field_'), 'value': user_answer}],
             'reply': '好的，了解了。',
+            'follow_up': False,
         })
 
 
