@@ -33,7 +33,7 @@ def chat(session_id):
 
     history.append({'role': 'assistant', 'text': response_text})
 
-    return jsonify({'response': response_text.strip()})
+    return jsonify({'response': '\n'.join(line.strip() for line in response_text.split('\n'))})
 
 
 @chat_bp.route('/<session_id>/extract', methods=['POST'])
@@ -80,13 +80,16 @@ def extract_interview_answer(session_id):
 
         result = json.loads(response.strip())
 
-        # Clean all string values from AI output
+        # Clean all string values from AI output: strip each line
+        def clean_text(s):
+            return '\n'.join(line.strip() for line in s.split('\n'))
+
         extracted = result.get('extracted', [])
         if isinstance(extracted, list):
             for item in extracted:
                 if isinstance(item, dict) and 'value' in item:
-                    item['value'] = item['value'].strip()
-        reply = result.get('reply', '好的，了解了。').strip()
+                    item['value'] = clean_text(item['value'])
+        reply = clean_text(result.get('reply', '好的，了解了。'))
 
         return jsonify({
             'extracted': extracted,
@@ -156,7 +159,7 @@ def chat_stream(session_id):
             report_context = session.get('analysis_results', {})
 
             # Get full response (non-streaming from LLM for now)
-            full_response = agent.chat(user_message, context=report_context, conversation_history=history).strip()
+            full_response = '\n'.join(line.strip() for line in agent.chat(user_message, context=report_context, conversation_history=history).split('\n'))
 
             # Simulate streaming by sending chunks
             chunk_size = 3  # characters per chunk
