@@ -97,6 +97,32 @@ def extract_interview_answer(session_id):
         })
 
 
+@chat_bp.route('/findings', methods=['POST'])
+def generate_findings():
+    """Generate key findings from interview notes"""
+    data = request.json
+    interview_notes = data.get('interview_notes', '')
+
+    if not interview_notes:
+        return jsonify({'error': 'interview_notes is required'}), 400
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.3)
+        prompt_template = agent.load_prompt('interview_findings.txt')
+        prompt = prompt_template.replace('{interview_notes}', interview_notes)
+
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+
+        findings = agent.call_llm(messages)
+        return jsonify({'findings': findings.strip()})
+    except Exception as e:
+        print(f'Findings generation failed: {e}')
+        return jsonify({'findings': '', 'error': str(e)}), 500
+
+
 @chat_bp.route('/<session_id>/stream', methods=['POST'])
 def chat_stream(session_id):
     """SSE streaming chat endpoint"""
