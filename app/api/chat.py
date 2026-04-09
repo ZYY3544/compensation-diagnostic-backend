@@ -36,6 +36,58 @@ def chat(session_id):
     return jsonify({'response': response_text})
 
 
+@chat_bp.route('/<session_id>/extract', methods=['POST'])
+def extract_interview_answer(session_id):
+    """Extract structured info from free-text interview answer using AI"""
+    from app.api.sessions import sessions_store
+
+    # Session is optional for extract - allow "_" as placeholder
+    if session_id != '_':
+        session = sessions_store.get(session_id)
+        if not session:
+            return jsonify({'error': 'Session not found'}), 404
+
+    data = request.json
+    user_answer = data.get('answer', '')
+    question_id = data.get('question_id', '')  # Q1-Q6
+    question_text = data.get('question_text', '')
+
+    if not user_answer:
+        return jsonify({'error': 'Answer is required'}), 400
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.1)
+        system_prompt = agent.load_prompt('interview_extract.txt')
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"问题编号：{question_id}\n问题内容：{question_text}\n用户回答：{user_answer}"}
+        ]
+
+        response = agent.call_llm(messages)
+
+        # Parse JSON
+        if '```json' in response:
+            response = response.split('```json')[1].split('```')[0]
+        elif '```' in response:
+            response = response.split('```')[1].split('```')[0]
+
+        result = json.loads(response.strip())
+
+        return jsonify({
+            'extracted': result.get('extracted', {}),
+            'reply': result.get('reply', '好的，了解了。'),
+        })
+    except Exception as e:
+        print(f'Extract failed: {e}')
+        # Fallback: use raw answer as value
+        return jsonify({
+            'extracted': {'field_name': question_id, 'value': user_answer},
+            'reply': '好的，了解了。',
+        })
+
+
 @chat_bp.route('/<session_id>/stream', methods=['POST'])
 def chat_stream(session_id):
     """SSE streaming chat endpoint"""
