@@ -45,15 +45,28 @@ def run_full_pipeline(file_path: str, session: dict) -> dict:
         if dept:
             departments.add(str(dept))
 
-        base = _safe_float(_get_mapped(d, field_map, 'base_salary'))
-        bonus = _safe_float(_get_mapped(d, field_map, 'bonus'))
+        base_annual = _safe_float(_get_mapped(d, field_map, 'base_salary'))
+        fixed_bonus = _safe_float(_get_mapped(d, field_map, 'fixed_bonus'))
+        variable_bonus = _safe_float(_get_mapped(d, field_map, 'variable_bonus'))
+        cash_allowance = _safe_float(_get_mapped(d, field_map, 'cash_allowance'))
+        reimbursement = _safe_float(_get_mapped(d, field_map, 'reimbursement'))
+        # TCC = 年度基本工资 + 年固定奖金 + 年浮动奖金 + 年现金津贴（不含报销）
+        tcc = base_annual + fixed_bonus + variable_bonus + cash_allowance
+        # 向后兼容：base_monthly 用于分析引擎的 CR 计算
+        base_monthly = base_annual / 12 if base_annual else 0
         emp = {
             'id': _get_mapped(d, field_map, 'employee_id') or f'ROW{row["row_number"]}',
             'job_title': _get_mapped(d, field_map, 'job_title') or '',
             'grade': str(grade) if grade else '',
             'department': str(dept) if dept else '',
-            'base_monthly': base,
-            'annual_bonus': bonus,
+            'base_annual': base_annual,
+            'base_monthly': base_monthly,
+            'fixed_bonus': fixed_bonus,
+            'variable_bonus': variable_bonus,
+            'cash_allowance': cash_allowance,
+            'reimbursement': reimbursement,
+            'annual_bonus': fixed_bonus + variable_bonus,  # 向后兼容
+            'tcc': tcc,
             'performance': _get_mapped(d, field_map, 'performance') or '',
             'hire_date': str(_get_mapped(d, field_map, 'hire_date') or ''),
             'manager': _get_mapped(d, field_map, 'manager') or '',
@@ -78,7 +91,7 @@ def run_full_pipeline(file_path: str, session: dict) -> dict:
     unlocked, locked = _compute_modules(has_performance, has_company_data)
 
     # 完整性得分
-    required_count = len(['job_title', 'grade', 'base_salary', 'bonus'])
+    required_count = len(['job_title', 'grade', 'base_salary', 'fixed_bonus'])
     completeness_score = int((1 - len(row_missing) / max(len(rows) * required_count, 1)) * 100)
     completeness_score = max(0, min(100, completeness_score))
 
@@ -167,10 +180,11 @@ def _detect_fields(columns: list) -> dict:
         'job_title': ['岗位', '职位', '头衔'],
         'grade': ['职级', '级别', '层级', 'level'],
         'department': ['部门', '一级'],
-        'base_salary': ['月薪', '基本工资', '固定月薪', '月度基本'],
-        'bonus': ['年终奖', '奖金', '年终'],
-        'thirteenth': ['13薪', '十三薪'],
-        'allowance': ['津贴', '补贴', '补助'],
+        'base_salary': ['年度基本工资', '基本工资', '月薪', '固定月薪', '月度基本'],
+        'fixed_bonus': ['年固定奖金', '固定奖金', '13薪', '十三薪', '年节礼金'],
+        'variable_bonus': ['年浮动奖金', '浮动奖金', '绩效奖金', '年终奖', '奖金', '年终'],
+        'cash_allowance': ['年现金津贴', '现金津贴', '津贴'],
+        'reimbursement': ['年津贴报销', '津贴报销', '报销'],
         'performance': ['绩效', '考核', '评级'],
         'hire_date': ['入职', '入司', '入职日期'],
         'manager': ['上级', '汇报', '主管'],
@@ -211,16 +225,17 @@ def _safe_float(val) -> float:
 def _detect_field_list(field_map: dict) -> list:
     standard_fields = [
         ('employee_id', '姓名/工号'), ('job_title', '岗位'), ('grade', '职级'),
-        ('base_salary', '月薪'), ('bonus', '年终奖'), ('department', '部门'),
-        ('performance', '绩效'), ('hire_date', '入司时间'),
+        ('base_salary', '年度基本工资'), ('fixed_bonus', '年固定奖金'),
+        ('variable_bonus', '年浮动奖金'), ('cash_allowance', '年现金津贴'),
+        ('department', '部门'), ('performance', '绩效'), ('hire_date', '入司时间'),
     ]
     return [{'name': label, 'detected': key in field_map} for key, label in standard_fields]
 
 
 def _detect_row_missing(rows: list, field_map: dict) -> list:
     missing = []
-    required_fields = ['job_title', 'grade', 'base_salary', 'bonus']
-    label_map = {'job_title': '岗位名称', 'grade': '职级', 'base_salary': '月薪', 'bonus': '年终奖'}
+    required_fields = ['job_title', 'grade', 'base_salary', 'fixed_bonus']
+    label_map = {'job_title': '岗位名称', 'grade': '职级', 'base_salary': '年度基本工资', 'fixed_bonus': '年固定奖金'}
     for row in rows:
         d = row['data']
         for req in required_fields:
@@ -277,7 +292,7 @@ def _build_corrections_from_code(code_results: dict | None) -> list:
         corr_id += 1
         corrections.append({
             'id': corr_id,
-            'description': f'第 {rows_str} 行年终奖已年化处理（入司不满 1 年）',
+            'description': f'第 {rows_str} 行浮动奖金已年化处理（入司不满 1 年）',
             'type': 'annualize_bonus',
         })
 
@@ -287,7 +302,7 @@ def _build_corrections_from_code(code_results: dict | None) -> list:
         corr_id += 1
         corrections.append({
             'id': corr_id,
-            'description': f'发现 {len(thirteenth)} 条记录年终奖疑似包含13薪，已标记',
+            'description': f'发现 {len(thirteenth)} 条记录浮动奖金疑似包含固定奖金部分，已标记',
             'type': '13th_month_reclassify',
         })
 
@@ -298,7 +313,7 @@ def _build_corrections_from_code(code_results: dict | None) -> list:
         corr_id += 1
         corrections.append({
             'id': corr_id,
-            'description': f'第 {rows_str} 行月薪偏离同级中位值超3倍，已标记为异常值',
+            'description': f'第 {rows_str} 行基本工资偏离同级中位值超3倍，已标记为异常值',
             'type': 'extreme_value',
         })
 
@@ -309,7 +324,7 @@ def _build_corrections_from_code(code_results: dict | None) -> list:
         corr_id += 1
         corrections.append({
             'id': corr_id,
-            'description': f'第 {rows_str} 行年终奖偏离同级中位值超3倍，已标记为异常值',
+            'description': f'第 {rows_str} 行浮动奖金偏离同级中位值超3倍，已标记为异常值',
             'type': 'extreme_value',
         })
 
