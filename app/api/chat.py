@@ -52,6 +52,8 @@ def extract_interview_answer(session_id):
     question_id = data.get('question_id', '')  # Q1-Q6
     question_text = data.get('question_text', '')
     previous_value = data.get('previous_value', '')  # 该字段已有的 value
+    is_follow_up = data.get('is_follow_up', False)  # 是否是追问
+    follow_up_question = data.get('follow_up_question', '')  # Sparky 的追问问题
     context = data.get('context', '')  # 之前的访谈上下文
 
     if not user_answer:
@@ -62,9 +64,12 @@ def extract_interview_answer(session_id):
         agent = BaseAgent(temperature=0.3)
         system_prompt = agent.load_prompt('interview_extract.txt')
 
-        user_content = f"问题编号：{question_id}\n问题内容：{question_text}\n用户回答：{user_answer}"
+        if is_follow_up and follow_up_question:
+            user_content = f"问题编号：{question_id}（追问）\nSparky 上一条追问的问题：{follow_up_question}\n用户回答：{user_answer}"
+        else:
+            user_content = f"问题编号：{question_id}\n问题内容：{question_text}\n用户回答：{user_answer}"
         if previous_value:
-            user_content += f"\n\n该字段当前已有的内容（你必须在此基础上整合新信息，不能丢弃已有的关键信息）：\n{previous_value}"
+            user_content += f"\n\n该字段已有的提炼内容（仅用于合并到 extracted.value 中，不要在 reply 中重复这些信息）：\n{previous_value}"
         if context:
             user_content += f"\n\n之前的访谈上下文：\n{context}"
 
