@@ -51,6 +51,7 @@ def extract_interview_answer(session_id):
     user_answer = data.get('answer', '')
     question_id = data.get('question_id', '')  # Q1-Q6
     question_text = data.get('question_text', '')
+    previous_value = data.get('previous_value', '')  # 该字段已有的 value
     context = data.get('context', '')  # 之前的访谈上下文
 
     if not user_answer:
@@ -62,6 +63,8 @@ def extract_interview_answer(session_id):
         system_prompt = agent.load_prompt('interview_extract.txt')
 
         user_content = f"问题编号：{question_id}\n问题内容：{question_text}\n用户回答：{user_answer}"
+        if previous_value:
+            user_content += f"\n\n该字段当前已有的内容（你必须在此基础上整合新信息，不能丢弃已有的关键信息）：\n{previous_value}"
         if context:
             user_content += f"\n\n之前的访谈上下文：\n{context}"
 
