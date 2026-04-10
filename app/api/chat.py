@@ -78,7 +78,7 @@ def extract_interview_answer(session_id):
         'Q1': {
             'name': '公司基本情况',
             'topic': '了解客户公司的业务、行业、规模、发展阶段',
-            'field_name': 'company_profile',
+            'field_names': ['company_profile'],
             'keywords': ['公司', '业务', '规模', '组织', '阶段', '行业', '员工'],
             'allowed': [
                 '主营业务、行业、产品或服务模式',
@@ -100,7 +100,7 @@ def extract_interview_answer(session_id):
         'Q2': {
             'name': '战略方向',
             'topic': '了解客户公司未来一年的业务战略重点和方向',
-            'field_name': 'strategy',
+            'field_names': ['strategy'],
             'keywords': ['战略', '方向', '规划', '扩张', '转型', 'AI', '增效', '市场', '未来'],
             'allowed': [
                 '未来 1-2 年的业务战略重点',
@@ -121,7 +121,7 @@ def extract_interview_answer(session_id):
         'Q3': {
             'name': '诊断诉求',
             'topic': '了解客户这次做薪酬诊断最想解决的核心问题',
-            'field_name': 'core_goal',
+            'field_names': ['core_goal'],
             'keywords': ['诊断', '诉求', '问题', '留人', '招人', '控成本', '公平', '想解决', '核心问题'],
             'allowed': [
                 '本次薪酬诊断最想解决的核心问题（留人、招人、控成本、公平性）',
@@ -139,7 +139,7 @@ def extract_interview_answer(session_id):
         'Q4': {
             'name': '流失情况',
             'topic': '了解客户公司近期的人才流失情况，包括哪些部门、什么级别、去向',
-            'field_name': 'attrition',
+            'field_names': ['attrition'],
             'keywords': ['流失', '离职', '离开', '人员变动', '不稳定', '司龄', '稳定性'],
             'allowed': [
                 '近期流失明显的部门、级别',
@@ -157,7 +157,7 @@ def extract_interview_answer(session_id):
         'Q5': {
             'name': '核心职能',
             'topic': '了解客户公司最关键的业务职能和岗位，以及这些岗位的人才市场竞争情况',
-            'field_name': 'core_functions',
+            'field_names': ['core_functions'],
             'keywords': ['核心', '关键', '岗位', '职能', '人才', '招聘', '稀缺', '走了', '关键节点'],
             'allowed': [
                 '哪些部门或岗位是业务的关键节点（走了业务就转不动的那种）',
@@ -174,7 +174,7 @@ def extract_interview_answer(session_id):
         'Q6': {
             'name': '薪酬管理现状',
             'topic': '了解客户当前的薪酬定位策略、调薪频率、预算和分配方式',
-            'field_name': 'pay_strategy / raise_mechanism（可同时输出两个）',
+            'field_names': ['pay_strategy', 'raise_mechanism'],
             'allowed': [
                 '薪酬定位策略（领先 / 跟随 / 滞后市场）',
                 '是否有岗位差异化定薪',
@@ -212,10 +212,24 @@ def extract_interview_answer(session_id):
         if current_q:
             allowed_str = '\n'.join(f'  - {x}' for x in current_q['allowed'])
             forbidden_str = '\n'.join(f'  - {x}' for x in current_q['forbidden'])
+            field_names = current_q['field_names']
+            if len(field_names) == 1:
+                field_name_block = (
+                    f"extracted 字段名（必须严格使用这个英文 key，不能用任何其他写法）：\n"
+                    f"  - {field_names[0]}"
+                )
+            else:
+                field_list = '\n'.join(f'  - {fn}' for fn in field_names)
+                field_name_block = (
+                    f"extracted 字段名（必须严格使用下面列出的英文 key 之一，不能用其他写法，不能把两个合并在一起）：\n"
+                    f"{field_list}\n"
+                    f"你可以在一次回复中同时输出多条 extracted（每条使用不同的 field_name），"
+                    f"分别记录对应子话题的信息。"
+                )
             current_q_block = (
                 f"\n\n========== 当前问题：{question_id} {current_q['name']} ==========\n"
                 f"主题：{current_q['topic']}\n"
-                f"extracted 字段名（必须使用这个，不能用其他）：{current_q['field_name']}\n\n"
+                f"{field_name_block}\n\n"
                 f"✅ 允许子话题（你的追问必须落在这个范围内）：\n{allowed_str}\n\n"
                 f"⛔ 严禁话题（绝对不要碰）：\n{forbidden_str}\n\n"
                 f"访谈策略：{current_q['strategy']}\n"
