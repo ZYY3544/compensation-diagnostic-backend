@@ -358,7 +358,11 @@ def generate_findings():
 
 @chat_bp.route('/review', methods=['POST'])
 def review_interview():
-    """Sparky 审阅完整的访谈纪要，指出可能的遗漏并问用户是否需要补充"""
+    """闭环 1：Sparky 自主修订访谈纪要（只做安全操作），然后告诉用户改了什么。
+
+    安全操作：格式整理 / 重复合并 / 矛盾标记
+    禁止：删内容 / 改语义 / 添加新信息
+    """
     data = request.json
     interview_notes = data.get('interview_notes', '')
 
@@ -367,25 +371,81 @@ def review_interview():
 
     try:
         from app.agents.base_agent import BaseAgent
-        agent = BaseAgent(temperature=0.5)
+        agent = BaseAgent(temperature=0.3)
         prompt = (
-            "你是 Sparky，刚完成了一轮业务访谈。以下是访谈纪要的完整内容：\n\n"
+            "你是 Sparky，刚完成了一轮 6 题的业务访谈。以下是当前纪要的完整内容：\n\n"
             f"{interview_notes}\n\n"
-            "请做两件事：\n"
-            "1. 检查纪要内容是否有明显的遗漏、矛盾或需要澄清的地方。"
-            "如果有，指出 1-2 个最关键的点。如果没有，说纪要整理得比较完整。\n"
-            "2. 问用户还有没有需要补充或修改的信息。\n\n"
-            "回复控制在 3-5 句话，100-150 字。用中文。直接输出纯文本，不要 JSON，不要 markdown 格式。"
+            "字段编号映射（输出 updates 时必须使用这些英文 field_name）：\n"
+            "- company_profile = 公司基本情况\n"
+            "- strategy = 战略方向\n"
+            "- core_goal = 诊断诉求\n"
+            "- attrition = 流失情况\n"
+            "- core_functions = 核心职能\n"
+            "- pay_strategy = 薪酬策略（属于薪酬管理现状）\n"
+            "- raise_mechanism = 调薪机制（属于薪酬管理现状）\n\n"
+            "你的任务是做两件事：\n\n"
+            "【第一件事】自主修订纪要。你只能做这三种安全操作：\n"
+            "  1. 格式整理：统一换行分隔、补齐 **加粗** 标记、移除多余空白、修正明显的排版混乱\n"
+            "  2. 重复合并：同一个字段里出现明显重复的描述，合并成一条\n"
+            "  3. 矛盾标记：如果发现字段之间有明显矛盾（比如规模前后不一致），"
+            "在对应 value 的开头用【⚠️待确认：具体描述】标出来让用户看到\n\n"
+            "绝对禁止（违反就是产品事故）：\n"
+            "  ❌ 删除任何有实质信息的内容，即使你觉得它不重要、不相关\n"
+            "  ❌ 改变任何陈述的语义，即使你觉得换个说法更好\n"
+            "  ❌ 添加原文里没有的新信息、新判断、新数据、新推理\n"
+            "  ❌ 跨字段搬运内容（比如把 Q1 的东西挪到 Q2）\n\n"
+            "【第二件事】用 2-3 句话告诉用户你刚才做了什么（比如\"我把战略方向那块的格式整理了一下，"
+            "另外发现规模前后提的数字不一样，我标了一下让你看看\"）。如果一个字段都没改，"
+            "reply 直接说\"纪要整理下来挺完整的\"。然后问用户还有没有要补充或修改的。\n\n"
+            "输出 JSON 格式：\n"
+            "{\n"
+            '  "updates": [\n'
+            '    {"field_name": "strategy", "value": "修订后的完整 value（全量，不是 diff）"}\n'
+            "  ],\n"
+            '  "reply": "给用户的回复：说你做了什么 + 问用户有没有补充"\n'
+            "}\n\n"
+            "注意：\n"
+            "- updates 列表只包含你真的修订了的字段。没改的字段不要出现在 updates 里\n"
+            "- 如果完全没什么需要改的，updates 返回空数组 []\n"
+            "- field_name 必须是上面列出的 7 个之一，不能自创\n"
+            "- 只输出 JSON，不要其他文字，不要 markdown 代码块\n"
+            "- 用中文"
         )
         messages = [
             {"role": "user", "content": prompt}
         ]
-        review_text = agent.call_llm(messages).strip()
-        return jsonify({'review': review_text})
+        response = agent.call_llm(messages)
+
+        # Parse JSON
+        if '```json' in response:
+            response = response.split('```json')[1].split('```')[0]
+        elif '```' in response:
+            response = response.split('```')[1].split('```')[0]
+        result = json.loads(response.strip())
+
+        def clean_text(s):
+            return '\n'.join(line.strip() for line in s.split('\n'))
+
+        updates = result.get('updates', [])
+        if isinstance(updates, list):
+            for item in updates:
+                if isinstance(item, dict) and 'value' in item:
+                    item['value'] = clean_text(item['value'])
+        reply = clean_text(result.get('reply', '纪要整理下来挺完整的。你看看还有什么想补充或者修改的？'))
+
+        print(f'[Interview Review] updates_count={len(updates) if isinstance(updates, list) else 0}, reply_len={len(reply)}')
+
+        return jsonify({
+            'updates': updates,
+            'reply': reply,
+        })
     except Exception as e:
         print(f'Review failed: {e}')
+        import traceback
+        traceback.print_exc()
         return jsonify({
-            'review': '我把六块信息都整理了一下，整体看下来比较完整。你看看右边的纪要，有没有需要补充或者修改的地方？没问题的话我们就进入下一步，生成关键发现。'
+            'updates': [],
+            'reply': '纪要整理下来挺完整的。你看看右边的卡片，有没有想补充或者修改的地方？没问题的话点下方「确认纪要 →」继续。'
         })
 
 
