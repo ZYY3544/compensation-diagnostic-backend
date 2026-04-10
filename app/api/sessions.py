@@ -1,11 +1,16 @@
 from flask import Blueprint, jsonify, request
 import uuid
 from datetime import datetime
+from pathlib import Path
 
 sessions_bp = Blueprint('sessions', __name__)
 
 # In-memory store for MVP (replace with Supabase later)
 sessions_store = {}
+
+def _load_welcome():
+    path = Path(__file__).resolve().parent.parent.parent / 'prompts' / 'interview_welcome.txt'
+    return path.read_text(encoding='utf-8').strip()
 
 @sessions_bp.route('/', methods=['POST'])
 def create_session():
@@ -23,7 +28,9 @@ def create_session():
         'interview_notes': None,
         'analysis_results': None,
     }
-    return jsonify(sessions_store[session_id]), 201
+    resp = dict(sessions_store[session_id])
+    resp['welcome'] = _load_welcome()
+    return jsonify(resp), 201
 
 @sessions_bp.route('/<session_id>', methods=['GET'])
 def get_session(session_id):
