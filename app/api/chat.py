@@ -60,12 +60,14 @@ def extract_interview_answer(session_id):
     if not user_answer:
         return jsonify({'error': 'Answer is required'}), 400
 
-    # 判定是否需要强制收束：非 Q6 超过 2 轮 / Q6 超过 3 轮
+    # 判定是否需要强制收束
+    # 非 Q6：round>=2 一律强制收束（每个问题确定性两轮：1 首答 + 1 追问回答）
+    # Q6：round>=4 才强制收束（Q6 允许 2-3 轮，round 2/3 尊重 AI）
     question_id_upper = (question_id or '').upper()
     if question_id_upper == 'Q6':
         should_force_close = round_num >= 4
     elif question_id_upper.startswith('Q'):
-        should_force_close = round_num >= 3
+        should_force_close = round_num >= 2
     else:
         should_force_close = False
 
@@ -113,17 +115,17 @@ def extract_interview_answer(session_id):
         reply = clean_text(result.get('reply', '好的，了解了。'))
 
         # 强制规则：基于 round 兜底
-        # round=1            → 强制 follow_up=true（必须追问一轮）
-        # Q6 且 round in 2,3 → 尊重 AI（Q6 可追问 2-3 轮）
-        # 其他 round>=3      → 强制 follow_up=false（最多 2 轮追问）
-        # round=2 非强制收束 → 尊重 AI 判断
+        # round=1                  → 强制 follow_up=true（必须追问一轮）
+        # Q6 且 round in {2,3}     → 尊重 AI（Q6 可追问 2-3 轮）
+        # 非 Q6 且 round>=2        → 强制 follow_up=false（确定性两轮）
+        # Q6 且 round>=4           → 强制 follow_up=false
         ai_follow_up = result.get('follow_up', False)
         if round_num == 1:
             follow_up_value = True
-        elif should_force_close:
-            follow_up_value = False
-        else:
+        elif question_id_upper == 'Q6' and round_num <= 3:
             follow_up_value = ai_follow_up
+        else:
+            follow_up_value = False
 
         print(f'[Interview Extract] Q={question_id}, round={round_num}, force_close={should_force_close}, ai_follow_up={ai_follow_up}, final={follow_up_value}')
 
