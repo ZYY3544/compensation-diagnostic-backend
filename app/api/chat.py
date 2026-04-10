@@ -356,6 +356,118 @@ def generate_findings():
         return jsonify({'findings': '', 'error': str(e)}), 500
 
 
+@chat_bp.route('/review', methods=['POST'])
+def review_interview():
+    """Sparky 审阅完整的访谈纪要，指出可能的遗漏并问用户是否需要补充"""
+    data = request.json
+    interview_notes = data.get('interview_notes', '')
+
+    if not interview_notes:
+        return jsonify({'error': 'interview_notes is required'}), 400
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.5)
+        prompt = (
+            "你是 Sparky，刚完成了一轮业务访谈。以下是访谈纪要的完整内容：\n\n"
+            f"{interview_notes}\n\n"
+            "请做两件事：\n"
+            "1. 检查纪要内容是否有明显的遗漏、矛盾或需要澄清的地方。"
+            "如果有，指出 1-2 个最关键的点。如果没有，说纪要整理得比较完整。\n"
+            "2. 问用户还有没有需要补充或修改的信息。\n\n"
+            "回复控制在 3-5 句话，100-150 字。用中文。直接输出纯文本，不要 JSON，不要 markdown 格式。"
+        )
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        review_text = agent.call_llm(messages).strip()
+        return jsonify({'review': review_text})
+    except Exception as e:
+        print(f'Review failed: {e}')
+        return jsonify({
+            'review': '我把六块信息都整理了一下，整体看下来比较完整。你看看右边的纪要，有没有需要补充或者修改的地方？没问题的话我们就进入下一步，生成关键发现。'
+        })
+
+
+@chat_bp.route('/supplement', methods=['POST'])
+def process_supplement():
+    """处理用户在审阅阶段的补充信息：AI 判断归属到哪张卡片并更新 value"""
+    data = request.json
+    interview_notes = data.get('interview_notes', '')
+    user_supplement = data.get('supplement', '')
+
+    if not user_supplement:
+        return jsonify({'error': 'supplement is required'}), 400
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.3)
+        prompt = (
+            "你是 Sparky，正在协助客户补充薪酬诊断访谈的纪要。用户现在补充了一些新信息，"
+            "你需要判断这些信息应该归属到哪个字段，并整合进原有内容。\n\n"
+            "可用的 field_name 有 7 个（严格使用，不要用其他）：\n"
+            "  - company_profile: 公司基本情况\n"
+            "  - strategy: 战略方向\n"
+            "  - core_goal: 诊断诉求\n"
+            "  - attrition: 流失情况\n"
+            "  - core_functions: 核心职能\n"
+            "  - pay_strategy: 薪酬策略\n"
+            "  - raise_mechanism: 调薪机制\n\n"
+            "当前纪要内容：\n"
+            f"{interview_notes}\n\n"
+            "用户补充：\n"
+            f"{user_supplement}\n\n"
+            "请做三件事：\n"
+            "1. 分析用户补充内容应该归属到哪个 field_name（可能是 1 个或多个）\n"
+            "2. 基于原有内容 + 用户补充，生成更新后的 value（保留原有关键信息，用换行分隔不同维度，关键词用 **加粗** 标记）\n"
+            "3. 用 1-2 句话确认，问用户还有没有其他想补充的，比如「好的，我把战略方向那块更新了一下。还有其他想补充的吗？」\n\n"
+            "输出 JSON 格式：\n"
+            "{\n"
+            "  \"updates\": [\n"
+            "    {\"field_name\": \"strategy\", \"value\": \"更新后的完整 value 内容\"}\n"
+            "  ],\n"
+            "  \"reply\": \"给用户的回应\"\n"
+            "}\n\n"
+            "只输出 JSON，不要其他文字。如果用户的补充不明确或者和现有纪要没关联，"
+            "返回空的 updates 列表和一句友好的澄清问话。"
+        )
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        response = agent.call_llm(messages)
+
+        # Parse JSON
+        if '```json' in response:
+            response = response.split('```json')[1].split('```')[0]
+        elif '```' in response:
+            response = response.split('```')[1].split('```')[0]
+        result = json.loads(response.strip())
+
+        # Clean text
+        def clean_text(s):
+            return '\n'.join(line.strip() for line in s.split('\n'))
+
+        updates = result.get('updates', [])
+        if isinstance(updates, list):
+            for item in updates:
+                if isinstance(item, dict) and 'value' in item:
+                    item['value'] = clean_text(item['value'])
+        reply = clean_text(result.get('reply', '好的，我记下了。还有其他想补充的吗？'))
+
+        return jsonify({
+            'updates': updates,
+            'reply': reply,
+        })
+    except Exception as e:
+        print(f'Supplement failed: {e}')
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'updates': [],
+            'reply': '好的，我记下了。还有其他想补充的吗？没问题的话，点击下方的「确认纪要 →」进入下一步。'
+        })
+
+
 @chat_bp.route('/<session_id>/stream', methods=['POST'])
 def chat_stream(session_id):
     """SSE streaming chat endpoint"""
