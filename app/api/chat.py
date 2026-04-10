@@ -71,13 +71,15 @@ def extract_interview_answer(session_id):
     else:
         should_force_close = False
 
-    # 每个 Q 的完整描述：主题 / 允许子话题 / 严禁话题 / extracted 字段名 / 访谈策略
+    # 每个 Q 的完整描述：主题 / 允许子话题 / 严禁话题 / extracted 字段名 / 访谈策略 / 核心关键词
     # AI 一次只看见一个 Q 的描述，看不到其他 Q 的存在
+    # keywords 是一组核心关键词，用于后端启发式检测 reply 是否真的过渡到了这一题
     Q_DESCRIPTIONS = {
         'Q1': {
             'name': '公司基本情况',
             'topic': '了解客户公司的业务、行业、规模、发展阶段',
             'field_name': 'company_profile',
+            'keywords': ['公司', '业务', '规模', '组织', '阶段', '行业', '员工'],
             'allowed': [
                 '主营业务、行业、产品或服务模式',
                 '公司规模（员工数、营收量级）',
@@ -99,6 +101,7 @@ def extract_interview_answer(session_id):
             'name': '战略方向',
             'topic': '了解客户公司未来一年的业务战略重点和方向',
             'field_name': 'strategy',
+            'keywords': ['战略', '方向', '规划', '扩张', '转型', 'AI', '增效', '市场', '未来'],
             'allowed': [
                 '未来 1-2 年的业务战略重点',
                 '业务扩张计划、新市场开拓',
@@ -119,6 +122,7 @@ def extract_interview_answer(session_id):
             'name': '诊断诉求',
             'topic': '了解客户这次做薪酬诊断最想解决的核心问题',
             'field_name': 'core_goal',
+            'keywords': ['诊断', '诉求', '问题', '留人', '招人', '控成本', '公平', '想解决', '核心问题'],
             'allowed': [
                 '本次薪酬诊断最想解决的核心问题（留人、招人、控成本、公平性）',
                 '诉求的优先级排序',
@@ -136,6 +140,7 @@ def extract_interview_answer(session_id):
             'name': '流失情况',
             'topic': '了解客户公司近期的人才流失情况，包括哪些部门、什么级别、去向',
             'field_name': 'attrition',
+            'keywords': ['流失', '离职', '离开', '人员变动', '不稳定', '司龄', '稳定性'],
             'allowed': [
                 '近期流失明显的部门、级别',
                 '流失的人才去向（同行、跨行、创业等）',
@@ -153,6 +158,7 @@ def extract_interview_answer(session_id):
             'name': '核心职能',
             'topic': '了解客户公司最关键的业务职能和岗位，以及这些岗位的人才市场竞争情况',
             'field_name': 'core_functions',
+            'keywords': ['核心', '关键', '岗位', '职能', '人才', '招聘', '稀缺', '走了', '关键节点'],
             'allowed': [
                 '哪些部门或岗位是业务的关键节点（走了业务就转不动的那种）',
                 '这些岗位的人才市场竞争情况',
@@ -301,20 +307,6 @@ def extract_interview_answer(session_id):
             follow_up_value = False
         else:
             follow_up_value = ai_follow_up
-
-        # 一致性兜底：若 AI 返回 follow_up=false 但 reply 看起来还在追问当前话题（不像过渡），
-        # 强行改回 true，避免前端推进 step 而 reply 实际上还停在原话题。
-        # 简单启发：检查 reply 是否包含下一题的关键词作为引导句。
-        if follow_up_value is False and not should_force_close:
-            next_q_for_check = get_next_q(question_id_upper)
-            if next_q_for_check:
-                # reply 必须至少提到下一题的名称或主题关键词，否则视为不一致
-                next_name = next_q_for_check['name']
-                if next_name not in reply and not any(
-                    kw in reply for kw in ['下一', '接下来', '再聊', '咱们继续', '换个话题']
-                ):
-                    print(f'[Interview Extract] INCONSISTENCY: AI returned follow_up=false but reply lacks transition signal, forcing follow_up=true')
-                    follow_up_value = True
 
         print(f'[Interview Extract] Q={question_id}, round={round_num}, force_close={should_force_close}, ai_follow_up={ai_follow_up}, final={follow_up_value}')
 
