@@ -229,21 +229,37 @@ def extract_interview_answer(session_id):
         if context:
             user_content += f"\n\n之前的访谈上下文：\n{context}"
 
-        # 仅在最后一轮（强制收束）时，告诉 AI 下一个话题是什么，方便它写过渡句
-        if should_force_close:
+        # round >= 2 时，告诉 AI 下一个话题是什么（任何可能过渡的轮次都需要）
+        # 同时强制 AI 保持 reply 内容和 follow_up 字段一致
+        if round_num >= 2:
             next_q = get_next_q(question_id_upper)
-            if next_q:
-                user_content += (
-                    f"\n\n【系统提示：这是当前问题的最后一轮，你必须在这次回复中做收束，"
-                    f"并自然过渡到下一个话题「{next_q['name']}」（{next_q['topic']}）。"
-                    f"过渡句要用当前话题的结论或关键信息作为引子，让两个话题之间有因果或递进关系，不要生硬拼接。"
-                    f"follow_up 必须为 false。】"
-                )
+            next_q_hint = (
+                f"下一个话题是「{next_q['name']}」（{next_q['topic']}）"
+                if next_q else "这是访谈的最后一题，没有下一题"
+            )
+
+            if should_force_close:
+                # 强制收束：必须 follow_up=false 并写过渡
+                if next_q:
+                    user_content += (
+                        f"\n\n【系统提示：这是当前问题的最后一轮，必须收束。\n"
+                        f"{next_q_hint}。\n"
+                        f"你必须：① 把 follow_up 设为 false；② 在 reply 里用当前话题的结论或关键信息作为引子，"
+                        f"自然过渡到下一个话题，不要生硬拼接。reply 末尾必须是一个引出下一话题的问题。】"
+                    )
+                else:
+                    user_content += (
+                        "\n\n【系统提示：这是访谈的最后一轮，请用 2-3 句话整体收束：简短总结这次访谈的核心发现，"
+                        "引导用户确认纪要并上传薪酬数据进行诊断。follow_up 必须为 false。】"
+                    )
             else:
-                # Q6 的最后一轮，没有下一题
+                # round=2 等中间轮次：AI 自由选择，但必须保证 reply 和 follow_up 一致
                 user_content += (
-                    "\n\n【系统提示：这是访谈的最后一轮，请用 2-3 句话整体收束：简短总结这次访谈的核心发现，"
-                    "引导用户确认纪要并上传薪酬数据进行诊断。follow_up 必须为 false。】"
+                    f"\n\n【系统提示：现在是第 {round_num} 轮回答。{next_q_hint}。\n"
+                    f"你有两个选择，必须严格保证 reply 和 follow_up 字段一致：\n"
+                    f"  ① 继续追问当前话题：follow_up=true，reply 必须写一个深入的追问问题（落在当前话题的允许子话题内）。\n"
+                    f"  ② 过渡到下一个话题：follow_up=false，reply 必须用当前话题的结论作引子，自然过渡到下一个话题，"
+                    f"reply 末尾必须是一个引出下一话题的问题。绝对不允许 follow_up=false 但 reply 还在追问当前话题。】"
                 )
 
         messages = [
@@ -285,6 +301,20 @@ def extract_interview_answer(session_id):
             follow_up_value = False
         else:
             follow_up_value = ai_follow_up
+
+        # 一致性兜底：若 AI 返回 follow_up=false 但 reply 看起来还在追问当前话题（不像过渡），
+        # 强行改回 true，避免前端推进 step 而 reply 实际上还停在原话题。
+        # 简单启发：检查 reply 是否包含下一题的关键词作为引导句。
+        if follow_up_value is False and not should_force_close:
+            next_q_for_check = get_next_q(question_id_upper)
+            if next_q_for_check:
+                # reply 必须至少提到下一题的名称或主题关键词，否则视为不一致
+                next_name = next_q_for_check['name']
+                if next_name not in reply and not any(
+                    kw in reply for kw in ['下一', '接下来', '再聊', '咱们继续', '换个话题']
+                ):
+                    print(f'[Interview Extract] INCONSISTENCY: AI returned follow_up=false but reply lacks transition signal, forcing follow_up=true')
+                    follow_up_value = True
 
         print(f'[Interview Extract] Q={question_id}, round={round_num}, force_close={should_force_close}, ai_follow_up={ai_follow_up}, final={follow_up_value}')
 
