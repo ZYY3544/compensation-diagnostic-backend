@@ -88,9 +88,6 @@ def extract_interview_answer(session_id):
 
         result = json.loads(response.strip())
 
-        # Log follow_up value for debugging
-        print(f'[Interview Extract] Q={question_id}, is_follow_up={is_follow_up}, follow_up_returned={result.get("follow_up")}, reply_len={len(result.get("reply", ""))}')
-
         # Clean all string values from AI output: strip each line
         def clean_text(s):
             return '\n'.join(line.strip() for line in s.split('\n'))
@@ -102,10 +99,18 @@ def extract_interview_answer(session_id):
                     item['value'] = clean_text(item['value'])
         reply = clean_text(result.get('reply', '好的，了解了。'))
 
+        # 强制规则：非追问轮（第一次回答），follow_up 必须为 true
+        follow_up_value = result.get('follow_up', False)
+        if not is_follow_up:
+            # 第一次回答，强制 follow_up = true
+            follow_up_value = True
+
+        print(f'[Interview Extract] Q={question_id}, is_follow_up={is_follow_up}, ai_follow_up={result.get("follow_up")}, forced_follow_up={follow_up_value}')
+
         return jsonify({
             'extracted': extracted,
             'reply': reply,
-            'follow_up': result.get('follow_up', False),
+            'follow_up': follow_up_value,
         })
     except Exception as e:
         print(f'Extract failed: {e}')
