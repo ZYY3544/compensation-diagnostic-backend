@@ -53,11 +53,21 @@ def extract_interview_answer(session_id):
     question_text = data.get('question_text', '')
     previous_value = data.get('previous_value', '')  # 该字段已有的 value
     is_follow_up = data.get('is_follow_up', False)  # 是否是追问
+    round_num = data.get('round', 1)  # 当前是第几轮回答：1=首次, 2=第一次追问回答, 3=第二次追问回答 ...
     follow_up_question = data.get('follow_up_question', '')  # Sparky 的追问问题
     context = data.get('context', '')  # 之前的访谈上下文
 
     if not user_answer:
         return jsonify({'error': 'Answer is required'}), 400
+
+    # 判定是否需要强制收束：非 Q6 超过 2 轮 / Q6 超过 3 轮
+    question_id_upper = (question_id or '').upper()
+    if question_id_upper == 'Q6':
+        should_force_close = round_num >= 4
+    elif question_id_upper.startswith('Q'):
+        should_force_close = round_num >= 3
+    else:
+        should_force_close = False
 
     try:
         from app.agents.base_agent import BaseAgent
@@ -72,6 +82,9 @@ def extract_interview_answer(session_id):
             user_content += f"\n\n该字段已有的提炼内容（仅用于合并到 extracted.value 中，不要在 reply 中重复这些信息）：\n{previous_value}"
         if context:
             user_content += f"\n\n之前的访谈上下文：\n{context}"
+
+        if should_force_close:
+            user_content += "\n\n【系统提示：这是当前问题的最后一轮，你必须在这次回复中做收束，自然过渡到下一个问题。follow_up 必须为 false。】"
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -99,13 +112,20 @@ def extract_interview_answer(session_id):
                     item['value'] = clean_text(item['value'])
         reply = clean_text(result.get('reply', '好的，了解了。'))
 
-        # 强制规则：非追问轮（第一次回答），follow_up 必须为 true
-        follow_up_value = result.get('follow_up', False)
-        if not is_follow_up:
-            # 第一次回答，强制 follow_up = true
+        # 强制规则：基于 round 兜底
+        # round=1            → 强制 follow_up=true（必须追问一轮）
+        # Q6 且 round in 2,3 → 尊重 AI（Q6 可追问 2-3 轮）
+        # 其他 round>=3      → 强制 follow_up=false（最多 2 轮追问）
+        # round=2 非强制收束 → 尊重 AI 判断
+        ai_follow_up = result.get('follow_up', False)
+        if round_num == 1:
             follow_up_value = True
+        elif should_force_close:
+            follow_up_value = False
+        else:
+            follow_up_value = ai_follow_up
 
-        print(f'[Interview Extract] Q={question_id}, is_follow_up={is_follow_up}, ai_follow_up={result.get("follow_up")}, forced_follow_up={follow_up_value}')
+        print(f'[Interview Extract] Q={question_id}, round={round_num}, force_close={should_force_close}, ai_follow_up={ai_follow_up}, final={follow_up_value}')
 
         return jsonify({
             'extracted': extracted,
