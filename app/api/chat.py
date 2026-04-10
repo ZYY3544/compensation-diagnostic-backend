@@ -88,6 +88,9 @@ def extract_interview_answer(session_id):
 
         result = json.loads(response.strip())
 
+        # Log follow_up value for debugging
+        print(f'[Interview Extract] Q={question_id}, is_follow_up={is_follow_up}, follow_up_returned={result.get("follow_up")}, reply_len={len(result.get("reply", ""))}')
+
         # Clean all string values from AI output: strip each line
         def clean_text(s):
             return '\n'.join(line.strip() for line in s.split('\n'))
