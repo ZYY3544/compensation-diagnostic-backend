@@ -295,13 +295,16 @@ def extract_interview_answer(session_id):
         reply = clean_text(result.get('reply', '好的，了解了。'))
 
         # 强制规则：基于 round 兜底
-        # round=1                  → 强制 follow_up=true（必须追问一轮）
-        # Q6 且 round in {2,3}     → 尊重 AI（Q6 可追问 2-3 轮）
-        # 非 Q6 且 round=2         → 尊重 AI（允许 AI 自己决定再追问一次或过渡）
-        # 非 Q6 且 round>=3        → 强制 follow_up=false
-        # Q6 且 round>=4           → 强制 follow_up=false
+        # round=1                       → 强制 follow_up=true（必须追问一轮）
+        # Q6 且 round<=2                → 强制 follow_up=true（Q6 有两个子话题，必须至少 2 轮追问才能覆盖完）
+        # Q6 且 round=3                 → 尊重 AI（可选的第 3 轮）
+        # Q6 且 round>=4                → 强制 follow_up=false
+        # 非 Q6 且 round=2              → 尊重 AI
+        # 非 Q6 且 round>=3             → 强制 follow_up=false
         ai_follow_up = result.get('follow_up', False)
         if round_num == 1:
+            follow_up_value = True
+        elif question_id_upper == 'Q6' and round_num <= 2:
             follow_up_value = True
         elif should_force_close:
             follow_up_value = False
