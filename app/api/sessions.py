@@ -1,16 +1,35 @@
 from flask import Blueprint, jsonify, request
 import uuid
+import json
 from datetime import datetime
-from pathlib import Path
 
 sessions_bp = Blueprint('sessions', __name__)
 
 # In-memory store for MVP (replace with Supabase later)
 sessions_store = {}
 
-def _load_welcome():
-    path = Path(__file__).resolve().parent.parent.parent / 'prompts' / 'interview_welcome.txt'
-    return path.read_text(encoding='utf-8').strip()
+
+def _generate_welcome():
+    """Call LLM to generate the interview opening message."""
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.5)
+        system_prompt = agent.load_prompt('interview_extract.txt')
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "问题编号：Opening\n问题内容：访谈开场\n用户回答：（用户刚进入页面，还没有说话）"},
+        ]
+        response = agent.call_llm(messages)
+        if '```json' in response:
+            response = response.split('```json')[1].split('```')[0]
+        elif '```' in response:
+            response = response.split('```')[1].split('```')[0]
+        result = json.loads(response.strip())
+        return result.get('reply', '')
+    except Exception as e:
+        print(f'Welcome generation failed: {e}')
+        return '你好！我是 Sparky，你的 AI 薪酬诊断助手。先简单介绍下你们公司吧？'
+
 
 @sessions_bp.route('/', methods=['POST'])
 def create_session():
@@ -29,7 +48,7 @@ def create_session():
         'analysis_results': None,
     }
     resp = dict(sessions_store[session_id])
-    resp['welcome'] = _load_welcome()
+    resp['welcome'] = _generate_welcome()
     return jsonify(resp), 201
 
 @sessions_bp.route('/<session_id>', methods=['GET'])
