@@ -61,15 +61,109 @@ def extract_interview_answer(session_id):
         return jsonify({'error': 'Answer is required'}), 400
 
     # 判定是否需要强制收束
-    # 非 Q6：round>=2 一律强制收束（每个问题确定性两轮：1 首答 + 1 追问回答）
-    # Q6：round>=4 才强制收束（Q6 允许 2-3 轮，round 2/3 尊重 AI）
+    # 非 Q6：round>=3 强制收束（允许 2 次追问）
+    # Q6：round>=4 才强制收束（Q6 允许 2-3 轮）
     question_id_upper = (question_id or '').upper()
     if question_id_upper == 'Q6':
         should_force_close = round_num >= 4
     elif question_id_upper.startswith('Q'):
-        should_force_close = round_num >= 2
+        should_force_close = round_num >= 3
     else:
         should_force_close = False
+
+    # 每个 Q 的边界规范：允许子话题 / 严禁话题 / 跨界处理
+    Q_BOUNDARIES = {
+        'Q1': {
+            'name': '公司基本情况',
+            'allowed': [
+                '主营业务、行业、产品或服务模式',
+                '公司规模（员工数、营收量级）',
+                '发展阶段（早期/成长期/成熟期/转型期）',
+                '组织架构（事业部、BU、中后台、分子公司）',
+                '地理布局（总部、分公司、海外办公室）',
+                '关键里程碑（IPO、融资、重大业务变动）',
+            ],
+            'forbidden': [
+                '未来战略、明年规划、转型方向（属于 Q2）',
+                '薪酬诊断的核心诉求（属于 Q3）',
+                '人才流失、员工离职情况（属于 Q4）',
+                '核心岗位、人才市场竞争（属于 Q5）',
+                '薪酬管理、调薪机制、薪酬定位（属于 Q6）',
+            ],
+        },
+        'Q2': {
+            'name': '战略方向',
+            'allowed': [
+                '未来 1-2 年的业务战略重点',
+                '业务扩张计划、新市场开拓',
+                '降本增效举措、组织优化',
+                'AI 转型 / 数字化转型的程度和路径',
+                '战略对人才结构的潜在影响（不要细聊薪酬）',
+            ],
+            'forbidden': [
+                '当前业务和组织（属于 Q1，已经聊过）',
+                '薪酬诊断的核心诉求（属于 Q3）',
+                '具体的人才流失数据（属于 Q4）',
+                '哪些岗位是核心（属于 Q5）',
+                '薪酬策略、调薪（属于 Q6）',
+            ],
+        },
+        'Q3': {
+            'name': '诊断诉求',
+            'allowed': [
+                '本次薪酬诊断最想解决的核心问题（留人、招人、控成本、公平性）',
+                '诉求的优先级排序',
+                '诉求的具体表现（用业务情境描述，不要细究流失数据）',
+                '诉求与之前提到的战略方向之间的张力或一致性',
+            ],
+            'forbidden': [
+                '具体的流失部门、级别、去向（属于 Q4）',
+                '哪些岗位最关键（属于 Q5）',
+                '薪酬策略、调薪机制的具体做法（属于 Q6）',
+            ],
+        },
+        'Q4': {
+            'name': '流失情况',
+            'allowed': [
+                '近期流失明显的部门、级别',
+                '流失的人才去向（同行、跨行、创业等）',
+                '流失原因的初步判断',
+                '如果流失不明显，转角度问平均司龄、员工活力、工作热情',
+            ],
+            'forbidden': [
+                '哪些岗位是核心（属于 Q5）',
+                '薪酬竞争力数据、薪酬定位（属于 Q6）',
+                '战略和诉求（已经聊过）',
+            ],
+        },
+        'Q5': {
+            'name': '核心职能',
+            'allowed': [
+                '哪些部门或岗位是业务的关键节点（走了业务就转不动的那种）',
+                '这些岗位的人才市场竞争情况',
+                '招聘难度和人才稀缺性',
+                '如果流失部门和核心职能重合，主动点出这个信号',
+            ],
+            'forbidden': [
+                '具体的薪酬数字、调薪机制（属于 Q6）',
+                '业务战略（已经聊过）',
+            ],
+        },
+        'Q6': {
+            'name': '薪酬管理现状',
+            'allowed': [
+                '薪酬定位策略（领先 / 跟随 / 滞后市场）',
+                '是否有岗位差异化定薪',
+                '薪酬数据来源（市场报告、自己摸索等）',
+                '调薪频率、调薪预算、调薪分配方式',
+                '固定 vs 浮动的结构',
+            ],
+            'forbidden': [
+                '业务、战略、流失等其他话题（已经聊过）',
+            ],
+        },
+    }
+    boundary = Q_BOUNDARIES.get(question_id_upper)
 
     try:
         from app.agents.base_agent import BaseAgent
@@ -84,6 +178,19 @@ def extract_interview_answer(session_id):
             user_content += f"\n\n该字段已有的提炼内容（仅用于合并到 extracted.value 中，不要在 reply 中重复这些信息）：\n{previous_value}"
         if context:
             user_content += f"\n\n之前的访谈上下文：\n{context}"
+
+        # 注入当前 Q 的边界规范，强制 AI 的追问问题落在允许范围内
+        if boundary:
+            allowed_str = '\n'.join(f'  - {x}' for x in boundary['allowed'])
+            forbidden_str = '\n'.join(f'  - {x}' for x in boundary['forbidden'])
+            user_content += (
+                f"\n\n【{question_id} 边界规范——这是硬性约束，优先级最高】\n"
+                f"当前问题：{boundary['name']}\n\n"
+                f"✅ 你的追问问题必须落在以下子话题范围内：\n{allowed_str}\n\n"
+                f"⛔ 严禁触碰以下话题（这些后面会专门聊）：\n{forbidden_str}\n\n"
+                f"🚧 如果用户的回答带出了禁区话题，简短确认后说\"这个我们后面会专门聊\"，"
+                f"然后把追问拉回到允许范围内。绝对不要顺着用户带出的禁区话题继续追问。"
+            )
 
         if should_force_close:
             user_content += "\n\n【系统提示：这是当前问题的最后一轮，你必须在这次回复中做收束，自然过渡到下一个问题。follow_up 必须为 false。】"
@@ -117,15 +224,16 @@ def extract_interview_answer(session_id):
         # 强制规则：基于 round 兜底
         # round=1                  → 强制 follow_up=true（必须追问一轮）
         # Q6 且 round in {2,3}     → 尊重 AI（Q6 可追问 2-3 轮）
-        # 非 Q6 且 round>=2        → 强制 follow_up=false（确定性两轮）
+        # 非 Q6 且 round=2         → 尊重 AI（允许 AI 自己决定再追问一次或过渡）
+        # 非 Q6 且 round>=3        → 强制 follow_up=false
         # Q6 且 round>=4           → 强制 follow_up=false
         ai_follow_up = result.get('follow_up', False)
         if round_num == 1:
             follow_up_value = True
-        elif question_id_upper == 'Q6' and round_num <= 3:
-            follow_up_value = ai_follow_up
-        else:
+        elif should_force_close:
             follow_up_value = False
+        else:
+            follow_up_value = ai_follow_up
 
         print(f'[Interview Extract] Q={question_id}, round={round_num}, force_close={should_force_close}, ai_follow_up={ai_follow_up}, final={follow_up_value}')
 
