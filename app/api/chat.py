@@ -397,8 +397,8 @@ def review_interview():
             "- attrition = 流失情况\n"
             "- core_functions = 核心职能\n"
             "- pay_management = 薪酬管理现状（包含薪酬定位策略 + 调薪机制两个方向）\n\n"
-            "你的任务是做两件事：\n\n"
-            "【第一件事】自主修订纪要。你只能做这三种安全操作：\n"
+            "你的任务是做三件事，对应输出 JSON 中的三个字段：\n\n"
+            "【第一件事 — updates】自主修订纪要。你只能做这三种安全操作：\n"
             "  1. 格式整理：统一换行分隔、补齐 **加粗** 标记、移除多余空白、修正明显的排版混乱\n"
             "  2. 重复合并：同一个字段里出现明显重复的描述，合并成一条\n"
             "  3. 矛盾标记：如果发现字段之间有明显矛盾（比如规模前后不一致），"
@@ -408,20 +408,29 @@ def review_interview():
             "  ❌ 改变任何陈述的语义，即使你觉得换个说法更好\n"
             "  ❌ 添加原文里没有的新信息、新判断、新数据、新推理\n"
             "  ❌ 跨字段搬运内容（比如把 Q1 的东西挪到 Q2）\n\n"
-            "【第二件事】用 2-3 句话告诉用户你刚才做了什么（比如\"我把战略方向那块的格式整理了一下，"
-            "另外发现规模前后提的数字不一样，我标了一下让你看看\"）。如果一个字段都没改，"
-            "reply 直接说\"纪要整理下来挺完整的\"。然后问用户还有没有要补充或修改的。\n\n"
+            "【第二件事 — summary】用 3-5 句话做整体总结。内容是你对整个访谈的专业判断："
+            "客户的业务、战略和薪酬管理之间的核心矛盾、值得关注的信号、结构化的观察。"
+            "语言要像资深顾问的复盘，不要客套、不要寒暄，直接给判断。150-220 字。\n\n"
+            "【第三件事 — reply】用 2-3 句话告诉用户你在纪要上动了什么（比如"
+            "\"我把战略方向那块的格式整理了一下，另外发现规模前后提的数字不一样，我标了一下让你看看\"）。"
+            "如果一个字段都没改，直接说\"纪要整理下来挺完整的，没什么需要修正的地方\"。"
+            "然后问用户还有没有要补充或修改的。80-120 字。\n\n"
+            "重要：summary 和 reply 是两条独立的消息，会被前端分别展示。\n"
+            "- summary 只包含\"整体总结/专业判断\"，不要包含\"我改了什么\"或\"问用户补充\"\n"
+            "- reply 只包含\"我改了什么 + 问用户补充\"，不要包含整体总结的内容\n"
+            "- 两者内容不要重复\n\n"
             "输出 JSON 格式：\n"
             "{\n"
             '  "updates": [\n'
             '    {"field_name": "strategy", "value": "修订后的完整 value（全量，不是 diff）"}\n'
             "  ],\n"
-            '  "reply": "给用户的回复：说你做了什么 + 问用户有没有补充"\n'
+            '  "summary": "整体总结，3-5 句话，150-220 字",\n'
+            '  "reply": "说你改了什么 + 问用户补充，2-3 句话，80-120 字"\n'
             "}\n\n"
             "注意：\n"
             "- updates 列表只包含你真的修订了的字段。没改的字段不要出现在 updates 里\n"
             "- 如果完全没什么需要改的，updates 返回空数组 []\n"
-            "- field_name 必须是上面列出的 7 个之一，不能自创\n"
+            "- field_name 必须是上面列出的 6 个之一，不能自创\n"
             "- 只输出 JSON，不要其他文字，不要 markdown 代码块\n"
             "- 用中文"
         )
@@ -445,12 +454,14 @@ def review_interview():
             for item in updates:
                 if isinstance(item, dict) and 'value' in item:
                     item['value'] = clean_text(item['value'])
+        summary = clean_text(result.get('summary', ''))
         reply = clean_text(result.get('reply', '纪要整理下来挺完整的。你看看还有什么想补充或者修改的？'))
 
-        print(f'[Interview Review] updates_count={len(updates) if isinstance(updates, list) else 0}, reply_len={len(reply)}')
+        print(f'[Interview Review] updates_count={len(updates) if isinstance(updates, list) else 0}, summary_len={len(summary)}, reply_len={len(reply)}')
 
         return jsonify({
             'updates': updates,
+            'summary': summary,
             'reply': reply,
         })
     except Exception as e:
@@ -459,6 +470,7 @@ def review_interview():
         traceback.print_exc()
         return jsonify({
             'updates': [],
+            'summary': '',
             'reply': '纪要整理下来挺完整的。你看看右边的卡片，有没有想补充或者修改的地方？没问题的话点下方「确认纪要 →」继续。'
         })
 
