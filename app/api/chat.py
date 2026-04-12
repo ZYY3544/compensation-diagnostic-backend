@@ -345,6 +345,50 @@ def extract_interview_answer(session_id):
         })
 
 
+@chat_bp.route('/summary', methods=['POST'])
+def generate_summary():
+    """Q6 结束后，Sparky 对整个访谈做整体总结 + 预告下一步（review）"""
+    data = request.json
+    interview_notes = data.get('interview_notes', '')
+
+    if not interview_notes:
+        return jsonify({'error': 'interview_notes is required'}), 400
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.5)
+        prompt = (
+            "你是 Sparky，刚完成了一轮 6 题的业务访谈。以下是访谈纪要的完整内容：\n\n"
+            f"{interview_notes}\n\n"
+            "请做一件事：用 4-5 句话做一段整体总结 + 预告你接下来的动作。结构如下：\n\n"
+            "前 3 句是你对整个访谈的专业判断（不是复述，是判断）：\n"
+            "  第 1 句：概括这家公司处在什么阶段 + 战略方向和薪酬管理之间的核心张力\n"
+            "  第 2 句：指出 1 个最关键的风险点（通常是核心职能、流失部门、诉求优先级三者之间的重合或矛盾）\n"
+            "  第 3 句：给出 1 个值得在薪酬诊断里深挖的切入点\n\n"
+            "最后 1-2 句是过渡语，预告你接下来要做的事情：\n"
+            "  告诉用户你接下来要对右边的访谈纪要做一遍检查和整理，看看有没有遗漏、矛盾或者需要补充的地方。\n"
+            "  语气自然，像顾问跟客户说「我先把纪要理一遍」。\n\n"
+            "要求：\n"
+            "- 语言要像资深顾问的复盘，不要客套、不要寒暄，直接给判断\n"
+            "- 关键词（部门名、战略方向、风险点、切入点）用 **加粗** 标记\n"
+            "- 总字数控制在 120-180 字\n"
+            "- 用中文\n"
+            "- 直接输出纯文本，不要 JSON，不要 markdown 代码块"
+        )
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        summary_text = agent.call_llm(messages).strip()
+        # 清理每行首尾空白
+        summary_text = '\n'.join(line.strip() for line in summary_text.split('\n'))
+        return jsonify({'summary': summary_text})
+    except Exception as e:
+        print(f'Summary failed: {e}')
+        return jsonify({
+            'summary': '整体看下来，访谈信息比较完整。我先把右边的纪要检查整理一遍，看看有没有遗漏或者前后不一致的地方。'
+        })
+
+
 @chat_bp.route('/findings', methods=['POST'])
 def generate_findings():
     """Generate key findings from interview notes"""
@@ -412,26 +456,14 @@ def review_interview():
             "哪怕只是补齐一个 **加粗** 标记、调整一下换行、把一个描述补全一点。"
             "目的是让用户看到你确实认真审阅了，而不是走过场。"
             "updates 列表不能为空——至少返回一项。\n\n"
-            "【第二件事 — summary】用 3 句话做整体总结，每句话有明确分工：\n"
-            "  第 1 句：概括这家公司处在什么阶段 + 战略方向和薪酬管理之间的核心张力是什么\n"
-            "  第 2 句：指出 1 个最关键的风险点（通常是核心职能、流失部门、诉求优先级三者之间的重合或矛盾）\n"
-            "  第 3 句：给出 1 个值得在薪酬诊断里深挖的切入点（比如\"建议重点看 XX 岗位的外部竞争力\"）\n"
-            "语言要像资深顾问的专业复盘，不要客套、不要寒暄，直接给判断。\n"
-            "关键词（部门名、战略方向、风险点、切入点）用 **加粗** 标记。\n"
-            "总字数控制在 100-150 字。\n\n"
-            "【第三件事 — reply】用 2 句话告诉用户你在纪要上动了什么（比如"
+            "【第二件事 — reply】用 2 句话告诉用户你在纪要上动了什么（比如"
             "\"我把战略方向那块的格式整理了一下，另外发现规模前后提的数字不一样，标了一下让你看看\"）。"
             "然后问用户还有没有要补充或修改的。80-120 字。\n\n"
-            "重要：summary 和 reply 是两条独立的消息，会被前端分别展示。\n"
-            "- summary 只包含\"整体判断 + 风险点 + 切入点\"，不要包含\"我改了什么\"或\"问用户补充\"\n"
-            "- reply 只包含\"我改了什么 + 问用户补充\"，不要包含整体判断的内容\n"
-            "- 两者内容不要重复\n\n"
             "输出 JSON 格式：\n"
             "{\n"
             '  "updates": [\n'
             '    {"field_name": "strategy", "value": "修订后的完整 value（全量，不是 diff）"}\n'
             "  ],\n"
-            '  "summary": "整体判断 3 句话，100-150 字，关键词加粗",\n'
             '  "reply": "说你改了什么 + 问用户补充，2 句话，80-120 字"\n'
             "}\n\n"
             "注意：\n"
@@ -460,14 +492,12 @@ def review_interview():
             for item in updates:
                 if isinstance(item, dict) and 'value' in item:
                     item['value'] = clean_text(item['value'])
-        summary = clean_text(result.get('summary', ''))
         reply = clean_text(result.get('reply', '纪要整理下来挺完整的。你看看还有什么想补充或者修改的？'))
 
-        print(f'[Interview Review] updates_count={len(updates) if isinstance(updates, list) else 0}, summary_len={len(summary)}, reply_len={len(reply)}')
+        print(f'[Interview Review] updates_count={len(updates) if isinstance(updates, list) else 0}, reply_len={len(reply)}')
 
         return jsonify({
             'updates': updates,
-            'summary': summary,
             'reply': reply,
         })
     except Exception as e:
@@ -476,7 +506,6 @@ def review_interview():
         traceback.print_exc()
         return jsonify({
             'updates': [],
-            'summary': '',
             'reply': '纪要整理下来挺完整的。你看看右边的卡片，有没有想补充或者修改的地方？没问题的话点下方「确认纪要 →」继续。'
         })
 
@@ -496,31 +525,42 @@ def process_supplement():
         agent = BaseAgent(temperature=0.3)
         prompt = (
             "你是 Sparky，正在协助客户补充薪酬诊断访谈的纪要。用户现在补充了一些新信息，"
-            "你需要判断这些信息应该归属到哪个字段，并整合进原有内容。\n\n"
-            "可用的 field_name 有 7 个（严格使用，不要用其他）：\n"
+            "你需要做三件事：回应补充、追问深挖、更新纪要。\n\n"
+            "可用的 field_name（严格使用，不要用其他）：\n"
             "  - company_profile: 公司基本情况\n"
             "  - strategy: 战略方向\n"
             "  - core_goal: 诊断诉求\n"
             "  - attrition: 流失情况\n"
             "  - core_functions: 核心职能\n"
-            "  - pay_management: 薪酬管理现状（薪酬定位策略 + 调薪机制）\n\n"
+            "  - pay_management: 薪酬管理现状（薪酬定位策略 + 调薪机制）\n"
+            "  - 如果用户补充的信息不属于以上任何一个字段，你可以自创一个 field_name（用英文下划线命名），"
+            "并在 new_card_title 里给出中文标题。前端会据此新建一张卡片。\n\n"
             "当前纪要内容：\n"
             f"{interview_notes}\n\n"
             "用户补充：\n"
             f"{user_supplement}\n\n"
-            "请做三件事：\n"
-            "1. 分析用户补充内容应该归属到哪个 field_name（可能是 1 个或多个）\n"
-            "2. 基于原有内容 + 用户补充，生成更新后的 value（保留原有关键信息，用换行分隔不同维度，关键词用 **加粗** 标记）\n"
-            "3. 用 1-2 句话确认，问用户还有没有其他想补充的，比如「好的，我把战略方向那块更新了一下。还有其他想补充的吗？」\n\n"
+            "请做三件事：\n\n"
+            "1. 回应 + 追问：\n"
+            "   - 先对用户的补充给出一个简短的专业回应（不是说\"好的记下了\"，而是给出一个专业观察）\n"
+            "   - 然后基于补充内容追问 1 个深入的问题，帮助用户挖掘更有价值的信息\n"
+            "   - 最后加一句\"如果没有其他要补充的，点下方「确认纪要 →」继续\"\n"
+            "   - 追问问题用 **加粗** 标记\n"
+            "   - 整段 reply 控制在 3-4 句话，100-150 字\n\n"
+            "2. 更新纪要：\n"
+            "   - 判断补充内容归属哪个 field_name\n"
+            "   - 基于原有内容 + 用户补充，生成更新后的完整 value（保留原有关键信息，用换行分隔，关键词用 **加粗** 标记）\n"
+            "   - 如果补充信息跟现有 6 个字段都不相关，使用自创 field_name + new_card_title\n\n"
+            "3. 如果用到了自创 field_name，在对应的 update 对象里加一个 new_card_title 字段（中文标题，带 emoji 前缀）\n\n"
             "输出 JSON 格式：\n"
             "{\n"
-            "  \"updates\": [\n"
-            "    {\"field_name\": \"strategy\", \"value\": \"更新后的完整 value 内容\"}\n"
+            '  "updates": [\n'
+            '    {"field_name": "strategy", "value": "更新后的完整 value 内容"},\n'
+            '    {"field_name": "org_culture", "value": "新卡片的内容", "new_card_title": "🏛️ 组织文化"}\n'
             "  ],\n"
-            "  \"reply\": \"给用户的回应\"\n"
+            '  "reply": "专业回应 + 追问 + 引导确认"\n'
             "}\n\n"
-            "只输出 JSON，不要其他文字。如果用户的补充不明确或者和现有纪要没关联，"
-            "返回空的 updates 列表和一句友好的澄清问话。"
+            "只输出 JSON，不要其他文字。如果用户的补充不明确，"
+            "reply 里友好地追问澄清，updates 返回空列表。"
         )
         messages = [
             {"role": "user", "content": prompt}
