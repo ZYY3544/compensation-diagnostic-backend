@@ -250,6 +250,8 @@ def _detect_column_missing(field_map: dict) -> list:
         ('management_track', '管理岗/专业岗', '管理溢价分析不可用'),
         ('key_position', '是否关键岗位', '关键岗位下钻不可用'),
         ('management_complexity', '管理复杂度', '管理复杂度定价不可用'),
+        ('age', '年龄', '年龄分布分析不可用'),
+        ('education', '教育背景', '学历薪酬分析不可用'),
     ]
     for field_key, field_name, impact in optional_checks:
         if field_key not in field_map:
