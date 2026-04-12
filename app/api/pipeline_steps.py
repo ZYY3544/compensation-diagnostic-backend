@@ -1,10 +1,11 @@
 """
 按需调用的 LLM pipeline 步骤，每个接口独立调用，避免上传时一次性超时。
-- POST /api/pipeline/<session_id>/cleansing    AI 清洗判断
-- POST /api/pipeline/<session_id>/grade-match   职级匹配
-- POST /api/pipeline/<session_id>/func-match    职能匹配
+- POST /api/pipeline/<session_id>/cleansing      AI 清洗判断
+- POST /api/pipeline/<session_id>/grade-match     职级匹配
+- POST /api/pipeline/<session_id>/func-match      职能匹配
+- POST /api/pipeline/<session_id>/parse-summary   解析总结（AI 生成一句话）
 """
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 pipeline_bp = Blueprint('pipeline', __name__)
 
@@ -112,3 +113,39 @@ def run_func_match(session_id):
         session['parse_result']['function_matching'] = function_matching
 
     return jsonify({'function_matching': function_matching})
+
+
+@pipeline_bp.route('/<session_id>/parse-summary', methods=['POST'])
+def parse_summary(session_id):
+    """让 Sparky 基于解析结果生成一句话总结"""
+    from app.api.sessions import sessions_store
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    data = request.json or {}
+    # 前端传入解析摘要
+    summary_data = data.get('summary', '')
+
+    import os
+    if not os.getenv('OPENROUTER_API_KEY', '').strip():
+        return jsonify({'message': ''})
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.5)
+        messages = [
+            {"role": "system", "content": (
+                "你是 Sparky，铭曦产品的 AI 薪酬诊断助手。"
+                "用户刚上传了薪酬数据 Excel，系统已完成解析。"
+                "请根据下面的解析摘要，用一句自然的口语（2-3 句话）告诉用户数据读取情况，"
+                "提醒他看看右边的字段和数量对不对，没问题就往下走。"
+                "语气轻松专业，不要用 markdown 格式。"
+            )},
+            {"role": "user", "content": summary_data},
+        ]
+        reply = agent.call_llm(messages)
+        return jsonify({'message': reply.strip()})
+    except Exception as e:
+        print(f'[Pipeline] parse-summary failed: {e}')
+        return jsonify({'message': ''})
