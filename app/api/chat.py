@@ -270,18 +270,34 @@ def extract_interview_answer(session_id):
                     )
                 else:
                     user_content += (
-                        "\n\n【系统提示：这是访谈的最后一轮，请用 2-3 句话整体收束：简短总结这次访谈的核心发现，"
-                        "引导用户确认纪要并上传薪酬数据进行诊断。follow_up 必须为 false。】"
+                        "\n\n【系统提示：这是访谈的最后一轮，也是整个六题访谈的最后一个问题。\n"
+                        "你必须做一个干净的收尾：\n"
+                        "- 用 2-3 句话对用户刚才关于薪酬管理的回答做一个专业观察（不要追问、不要提新问题）\n"
+                        "- 最后一句话说类似「好的，六个方面都聊得差不多了，我先整理一下纪要」\n"
+                        "- reply 里绝对不能出现任何追问问题、加粗的问题、或者引导用户回答的语句\n"
+                        "- follow_up 必须为 false\n"
+                        "- 这条 reply 的作用就是给整个访谈画句号，后面的整体总结和纪要审阅会由系统自动触发】"
                     )
             else:
-                # round=2 等中间轮次：AI 自由选择，但必须保证 reply 和 follow_up 一致
-                user_content += (
-                    f"\n\n【系统提示：现在是第 {round_num} 轮回答。{next_q_hint}。\n"
-                    f"你有两个选择，必须严格保证 reply 和 follow_up 字段一致：\n"
-                    f"  ① 继续追问当前话题：follow_up=true，reply 必须写一个深入的追问问题（落在当前话题的允许子话题内）。\n"
-                    f"  ② 过渡到下一个话题：follow_up=false，reply 必须用当前话题的结论作引子，自然过渡到下一个话题，"
-                    f"reply 末尾必须是一个引出下一话题的问题。绝对不允许 follow_up=false 但 reply 还在追问当前话题。】"
-                )
+                if not next_q:
+                    # Q6 的中间轮次（round=3）：可以选择继续追问或收尾
+                    user_content += (
+                        f"\n\n【系统提示：现在是第 {round_num} 轮回答。这是整个访谈的最后一题。\n"
+                        f"你有两个选择，必须严格保证 reply 和 follow_up 字段一致：\n"
+                        f"  ① 继续追问当前话题：follow_up=true，reply 写一个深入的追问问题。\n"
+                        f"  ② 结束访谈：follow_up=false，reply 用 2-3 句话对用户的回答做专业观察，"
+                        f"最后一句说类似「好的，六个方面都聊得差不多了，我先整理一下纪要」。"
+                        f"reply 里不能有任何追问问题或加粗的问题。】"
+                    )
+                else:
+                    # 非 Q6 的中间轮次
+                    user_content += (
+                        f"\n\n【系统提示：现在是第 {round_num} 轮回答。{next_q_hint}。\n"
+                        f"你有两个选择，必须严格保证 reply 和 follow_up 字段一致：\n"
+                        f"  ① 继续追问当前话题：follow_up=true，reply 必须写一个深入的追问问题（落在当前话题的允许子话题内）。\n"
+                        f"  ② 过渡到下一个话题：follow_up=false，reply 必须用当前话题的结论作引子，自然过渡到下一个话题，"
+                        f"reply 末尾必须是一个引出下一话题的问题。绝对不允许 follow_up=false 但 reply 还在追问当前话题。】"
+                    )
 
         messages = [
             {"role": "system", "content": system_prompt},
