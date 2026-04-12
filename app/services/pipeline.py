@@ -10,15 +10,12 @@ from app.agents.cleansing_agent import CleansingAgent
 from app.agents.matching_agent import MatchingAgent
 
 
-def run_full_pipeline(file_path: str, session: dict) -> dict:
+def run_upload_pipeline(file_path: str, session: dict) -> dict:
     """
-    完整的上传后处理流水线：
+    上传阶段流水线（快速，不调 LLM）：
     1. 解析 Excel
-    2. 代码层跑 15 条规则检测
-    3. AI 清洗判断（只处理代码搞不定的问题）
-    4. 职级匹配（LLM）
-    5. 职能匹配（LLM）
-    返回合并后的完整结果，格式与前端 ParseResult 对齐
+    2. 代码层跑 15 条规则检测 + 完整性分析
+    返回前端 ParseResult 完整结构（grade/func matching 用占位数据）
     """
     # ------------------------------------------------------------------
     # Step 1: 解析 Excel
@@ -28,10 +25,8 @@ def run_full_pipeline(file_path: str, session: dict) -> dict:
     columns = parsed.get('column_names', [])
     sheet2 = parsed.get('sheet2_data', {})
 
-    # 字段映射（复用 upload.py 的逻辑）
     field_map = _detect_fields(columns)
 
-    # 提取基础统计
     grades = set()
     departments = set()
     employees = []
@@ -50,9 +45,7 @@ def run_full_pipeline(file_path: str, session: dict) -> dict:
         variable_bonus = _safe_float(_get_mapped(d, field_map, 'variable_bonus'))
         cash_allowance = _safe_float(_get_mapped(d, field_map, 'cash_allowance'))
         reimbursement = _safe_float(_get_mapped(d, field_map, 'reimbursement'))
-        # TCC = 年度基本工资 + 年固定奖金 + 年浮动奖金 + 年现金津贴（不含报销）
         tcc = base_annual + fixed_bonus + variable_bonus + cash_allowance
-        # 向后兼容：base_monthly 用于分析引擎的 CR 计算
         base_monthly = base_annual / 12 if base_annual else 0
         emp = {
             'id': _get_mapped(d, field_map, 'employee_id') or f'ROW{row["row_number"]}',
@@ -65,7 +58,7 @@ def run_full_pipeline(file_path: str, session: dict) -> dict:
             'variable_bonus': variable_bonus,
             'cash_allowance': cash_allowance,
             'reimbursement': reimbursement,
-            'annual_bonus': fixed_bonus + variable_bonus,  # 向后兼容
+            'annual_bonus': fixed_bonus + variable_bonus,
             'tcc': tcc,
             'performance': _get_mapped(d, field_map, 'performance') or '',
             'hire_date': str(_get_mapped(d, field_map, 'hire_date') or ''),
@@ -76,27 +69,17 @@ def run_full_pipeline(file_path: str, session: dict) -> dict:
     grades_list = sorted(grades)
     depts_list = sorted(departments)
 
-    # 基础字段检测
     fields_detected = _detect_field_list(field_map)
-
-    # 基础完整性检测（空值）
     row_missing = _detect_row_missing(rows, field_map)
-
-    # 缺失的可选列
     column_missing = _detect_column_missing(field_map)
 
-    # 模块解锁
     has_performance = 'performance' in field_map
     has_company_data = len(sheet2) > 0
     unlocked, locked = _compute_modules(has_performance, has_company_data)
 
-    # 完整性得分
     required_count = len(['job_title', 'grade', 'base_salary', 'fixed_bonus'])
     completeness_score = int((1 - len(row_missing) / max(len(rows) * required_count, 1)) * 100)
     completeness_score = max(0, min(100, completeness_score))
-
-    # Sparky 消息收集器
-    sparky_messages = {}
 
     # ------------------------------------------------------------------
     # Step 2: 代码层 15 条规则检测
@@ -108,36 +91,19 @@ def run_full_pipeline(file_path: str, session: dict) -> dict:
         print(f'[Pipeline] code checks failed: {e}')
         traceback.print_exc()
 
-    # 从代码检测构建 cleansing_corrections
     corrections = _build_corrections_from_code(code_results)
 
-    # ------------------------------------------------------------------
-    # Step 3: AI 清洗判断（可选）
-    # ------------------------------------------------------------------
-    ai_results = None
-    if code_results and _has_api_key():
-        try:
-            agent = CleansingAgent()
-            ai_results = agent.run(code_results)
-            if ai_results and not ai_results.get('error'):
-                # 合并 AI 判断到 corrections
-                corrections = _merge_ai_corrections(corrections, ai_results, code_results)
-        except Exception as e:
-            print(f'[Pipeline] AI cleansing skipped: {e}')
+    # 占位：职级/职能匹配用 fallback（全 low confidence），等用户走到那步再调 LLM
+    grade_matching = _fallback_grade_matching(grades_list)
+    function_matching = _fallback_function_matching_from_employees(employees)
 
-    # ------------------------------------------------------------------
-    # Step 4: 职级匹配（LLM）
-    # ------------------------------------------------------------------
-    grade_matching = _run_grade_matching(grades_list, employees, rows, field_map, code_results)
+    # 把中间状态存到 session，供后续 LLM 步骤使用
+    session['_code_results'] = code_results
+    session['_base_corrections'] = corrections
+    session['_grades_list'] = grades_list
+    session['_field_map'] = field_map
+    session['_employees'] = employees
 
-    # ------------------------------------------------------------------
-    # Step 5: 职能匹配（LLM）
-    # ------------------------------------------------------------------
-    function_matching = _run_function_matching(employees)
-
-    # ------------------------------------------------------------------
-    # Step 6: 组装最终结果
-    # ------------------------------------------------------------------
     result = {
         'employee_count': len(rows),
         'grade_count': len(grades_list),
@@ -585,6 +551,18 @@ def _run_function_matching(employees: list) -> list:
     except Exception as e:
         print(f'[Pipeline] function matching LLM failed: {e}')
         return _fallback_function_matching(job_titles_with_dept)
+
+
+def _fallback_function_matching_from_employees(employees: list) -> list:
+    """从 employees 列表提取 job_titles 构建 fallback function matching"""
+    seen = set()
+    result = []
+    for emp in employees:
+        title = emp.get('job_title', '')
+        if title and title not in seen:
+            seen.add(title)
+            result.append({'title': title, 'matched': None, 'confidence': 'low', 'confirmed': False})
+    return result
 
 
 def _fallback_function_matching(job_titles_with_dept: list) -> list:

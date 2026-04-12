@@ -30,8 +30,8 @@ def upload_file(session_id):
 
     try:
         # Run full pipeline: parse → code checks → AI cleansing → grade match → func match
-        from app.services.pipeline import run_full_pipeline
-        result = run_full_pipeline(file_path, session)
+        from app.services.pipeline import run_upload_pipeline
+        result = run_upload_pipeline(file_path, session)
         session['status'] = 'parsed'
         session['employee_count'] = result['employee_count']
         session['parse_result'] = result

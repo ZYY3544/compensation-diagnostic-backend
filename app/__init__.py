@@ -16,11 +16,13 @@ def create_app():
     from app.api.upload import upload_bp
     from app.api.chat import chat_bp
     from app.api.report import report_bp
+    from app.api.pipeline_steps import pipeline_bp
 
     app.register_blueprint(sessions_bp, url_prefix='/api/sessions')
     app.register_blueprint(upload_bp, url_prefix='/api/upload')
     app.register_blueprint(chat_bp, url_prefix='/api/chat')
     app.register_blueprint(report_bp, url_prefix='/api/report')
+    app.register_blueprint(pipeline_bp, url_prefix='/api/pipeline')
 
     @app.route('/api/health')
     def health():
