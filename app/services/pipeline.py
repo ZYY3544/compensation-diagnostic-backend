@@ -170,7 +170,7 @@ def _detect_fields(columns: list) -> dict:
         'employee_id': ['工号', '姓名', '员工'],
         'job_title': ['岗位', '职位', '头衔'],
         'grade': ['职级', '级别', '层级', 'level'],
-        'department': ['部门', '一级'],
+        'department': ['部门（一级）', '一级部门', '一级'],
         'base_salary': ['年度基本工资', '基本工资', '月薪', '固定月薪', '月度基本'],
         'fixed_bonus': ['年固定奖金', '固定奖金', '13薪', '十三薪', '年节礼金'],
         'variable_bonus': ['年浮动奖金', '浮动奖金', '绩效奖金', '年终奖', '奖金', '年终'],
