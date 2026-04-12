@@ -73,6 +73,27 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
     row_missing = _detect_row_missing(rows, field_map)
     column_missing = _detect_column_missing(field_map)
 
+    # 检测每列是否有实际数据（供概览面板使用）
+    columns_with_data = set()
+    for row in rows:
+        for col_name, val in row['data'].items():
+            if val is not None and str(val).strip():
+                columns_with_data.add(col_name)
+
+    # 反向映射：column_name → standard_field_key
+    col_to_field = {}
+    for fk, cn in field_map.items():
+        col_to_field[cn] = fk
+
+    all_columns_status = [
+        {
+            'name': col,
+            'has_data': col in columns_with_data,
+            'mapped_to': col_to_field.get(col),
+        }
+        for col in columns
+    ]
+
     has_performance = 'performance' in field_map
     has_company_data = len(sheet2) > 0
     unlocked, locked = _compute_modules(has_performance, has_company_data)
@@ -111,6 +132,10 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
         'grades': grades_list,
         'departments': depts_list,
         'fields_detected': fields_detected,
+        'all_columns_status': all_columns_status,
+        'sheet_count': parsed.get('sheet_count', 1),
+        'sheet_names': parsed.get('sheet_names', []),
+        'sheet2_summary': parsed.get('sheet2_summary', {'years': [], 'year_count': 0, 'metrics': []}),
         'completeness_issues': {
             'row_missing': row_missing[:20],
             'column_missing': column_missing,
