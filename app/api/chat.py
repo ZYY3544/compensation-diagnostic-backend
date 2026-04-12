@@ -461,8 +461,6 @@ def review_interview():
             "角度是「充盈访谈内容」而不是「检查纪要有没有问题」。"
             "比如「除了刚才聊的这些，你们还有没有什么正在推进的、或者比较关心的事情想补充？"
             "比如最近有没有组织调整、新的激励方案在酝酿、或者竞对动作之类的。」\n"
-            "  第 3 段：告诉用户如果没有要补充的，可以点击右边的「确认纪要 →」按钮，"
-            "你会生成一段关键提炼发现。\n"
             "  整段 reply 控制在 80-150 字。\n\n"
             "输出 JSON 格式：\n"
             "{\n"
@@ -529,8 +527,12 @@ def process_supplement():
         from app.agents.base_agent import BaseAgent
         agent = BaseAgent(temperature=0.3)
         prompt = (
-            "你是 Sparky，正在协助客户补充薪酬诊断访谈的纪要。用户现在补充了一些新信息，"
-            "你需要做三件事：回应补充、追问深挖、更新纪要。\n\n"
+            "你是 Sparky，正在协助客户补充薪酬诊断访谈的纪要。\n\n"
+            "首先判断用户的意图：\n"
+            "- 如果用户表示没有要补充的（比如「没有了」「暂时没有」「差不多了」「没什么了」「OK」「可以了」等），"
+            "返回 no_supplement=true，reply 里简短确认，"
+            "然后告诉用户可以点击右边的「确认纪要 →」按钮，你会生成一段关键提炼发现。\n"
+            "- 如果用户确实在补充新信息，按下面的流程处理。\n\n"
             "可用的 field_name（严格使用，不要用其他）：\n"
             "  - company_profile: 公司基本情况\n"
             "  - strategy: 战略方向\n"
@@ -542,13 +544,12 @@ def process_supplement():
             "并在 new_card_title 里给出中文标题。前端会据此新建一张卡片。\n\n"
             "当前纪要内容：\n"
             f"{interview_notes}\n\n"
-            "用户补充：\n"
+            "用户输入：\n"
             f"{user_supplement}\n\n"
-            "请做三件事：\n\n"
+            "如果用户确实在补充信息，请做三件事：\n\n"
             "1. 回应 + 追问：\n"
             "   - 先对用户的补充给出一个简短的专业回应（不是说\"好的记下了\"，而是给出一个专业观察）\n"
             "   - 然后基于补充内容追问 1 个深入的问题，帮助用户挖掘更有价值的信息\n"
-            "   - 最后加一句\"如果没有其他要补充的，点下方「确认纪要 →」继续\"\n"
             "   - 追问问题用 **加粗** 标记\n"
             "   - 整段 reply 控制在 3-4 句话，100-150 字\n\n"
             "2. 更新纪要：\n"
@@ -556,16 +557,24 @@ def process_supplement():
             "   - 基于原有内容 + 用户补充，生成更新后的完整 value（保留原有关键信息，用换行分隔，关键词用 **加粗** 标记）\n"
             "   - 如果补充信息跟现有 6 个字段都不相关，使用自创 field_name + new_card_title\n\n"
             "3. 如果用到了自创 field_name，在对应的 update 对象里加一个 new_card_title 字段（中文标题，带 emoji 前缀）\n\n"
-            "输出 JSON 格式：\n"
+            "输出 JSON 格式（两种情况）：\n\n"
+            "情况一：用户没有要补充的\n"
             "{\n"
+            '  "no_supplement": true,\n'
+            '  "updates": [],\n'
+            '  "reply": "简短确认 + 告诉用户点「确认纪要 →」会生成关键提炼发现"\n'
+            "}\n\n"
+            "情况二：用户补充了新信息\n"
+            "{\n"
+            '  "no_supplement": false,\n'
             '  "updates": [\n'
             '    {"field_name": "strategy", "value": "更新后的完整 value 内容"},\n'
             '    {"field_name": "org_culture", "value": "新卡片的内容", "new_card_title": "🏛️ 组织文化"}\n'
             "  ],\n"
-            '  "reply": "专业回应 + 追问 + 引导确认"\n'
+            '  "reply": "专业回应 + 追问"\n'
             "}\n\n"
             "只输出 JSON，不要其他文字。如果用户的补充不明确，"
-            "reply 里友好地追问澄清，updates 返回空列表。"
+            "reply 里友好地追问澄清，updates 返回空列表，no_supplement 为 false。"
         )
         messages = [
             {"role": "user", "content": prompt}
