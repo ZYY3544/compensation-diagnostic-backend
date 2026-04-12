@@ -66,13 +66,17 @@ def run_grade_match(session_id):
     if session.get('_grade_match_done'):
         return jsonify({'grade_matching': session.get('grade_matching', [])})
 
-    from app.services.pipeline import _run_grade_matching
+    from app.services.pipeline import _run_grade_matching, _fallback_grade_matching
     grades_list = session.get('_grades_list', [])
     employees = session.get('_employees', [])
     field_map = session.get('_field_map', {})
     code_results = session.get('_code_results')
 
-    grade_matching = _run_grade_matching(grades_list, employees, [], field_map, code_results)
+    import os
+    if not os.getenv('OPENROUTER_API_KEY', '').strip():
+        grade_matching = _fallback_grade_matching(grades_list)
+    else:
+        grade_matching = _run_grade_matching(grades_list, employees, [], field_map, code_results)
 
     session['grade_matching'] = grade_matching
     session['_grade_match_done'] = True
@@ -93,10 +97,14 @@ def run_func_match(session_id):
     if session.get('_func_match_done'):
         return jsonify({'function_matching': session.get('function_matching', [])})
 
-    from app.services.pipeline import _run_function_matching
+    from app.services.pipeline import _run_function_matching, _fallback_function_matching_from_employees
     employees = session.get('_employees', [])
 
-    function_matching = _run_function_matching(employees)
+    import os
+    if not os.getenv('OPENROUTER_API_KEY', '').strip():
+        function_matching = _fallback_function_matching_from_employees(employees)
+    else:
+        function_matching = _run_function_matching(employees)
 
     session['function_matching'] = function_matching
     session['_func_match_done'] = True
