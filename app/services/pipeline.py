@@ -71,14 +71,15 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
 
     fields_detected = _detect_field_list(field_map)
     row_missing = _detect_row_missing(rows, field_map)
-    column_missing = _detect_column_missing(field_map)
 
-    # 检测每列是否有实际数据（供概览面板使用）
+    # 检测每列是否有实际数据
     columns_with_data = set()
     for row in rows:
         for col_name, val in row['data'].items():
             if val is not None and str(val).strip():
                 columns_with_data.add(col_name)
+
+    column_missing = _detect_column_missing(field_map, columns_with_data)
 
     # 反向映射：column_name → standard_field_key
     col_to_field = {}
@@ -244,7 +245,7 @@ def _detect_row_missing(rows: list, field_map: dict) -> list:
     return missing
 
 
-def _detect_column_missing(field_map: dict) -> list:
+def _detect_column_missing(field_map: dict, columns_with_data: set = None) -> list:
     missing = []
     optional_checks = [
         ('management_track', '管理岗/专业岗', '管理溢价分析不可用'),
@@ -255,7 +256,13 @@ def _detect_column_missing(field_map: dict) -> list:
     ]
     for field_key, field_name, impact in optional_checks:
         if field_key not in field_map:
+            # 列头不存在
             missing.append({'field': field_name, 'impact': impact})
+        elif columns_with_data is not None:
+            # 列头存在但数据全空
+            col_name = field_map[field_key]
+            if col_name not in columns_with_data:
+                missing.append({'field': field_name, 'impact': impact})
     return missing
 
 
