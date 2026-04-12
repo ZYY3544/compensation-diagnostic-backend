@@ -115,6 +115,42 @@ def run_func_match(session_id):
     return jsonify({'function_matching': function_matching})
 
 
+@pipeline_bp.route('/<session_id>/completeness-summary', methods=['POST'])
+def completeness_summary(session_id):
+    """让 Sparky 基于完整度检查结果生成一句话总结"""
+    from app.api.sessions import sessions_store
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    data = request.json or {}
+    summary_data = data.get('summary', '')
+
+    import os
+    if not os.getenv('OPENROUTER_API_KEY', '').strip():
+        return jsonify({'message': ''})
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.5)
+        messages = [
+            {"role": "system", "content": (
+                "你是 Sparky，铭曦产品的 AI 薪酬诊断助手。"
+                "系统刚完成了数据完整度检查。请根据下面的检查结果，"
+                "用 2-3 句自然口语告诉用户情况，提醒他看看右边的详情，"
+                "让他决定是补完数据重新上传还是先跳过继续。"
+                "如果没有任何缺失问题，就夸一下数据质量好，让他直接往下走。"
+                "语气轻松专业，不要用 markdown 格式。"
+            )},
+            {"role": "user", "content": summary_data},
+        ]
+        reply = agent.call_llm(messages)
+        return jsonify({'message': reply.strip()})
+    except Exception as e:
+        print(f'[Pipeline] completeness-summary failed: {e}')
+        return jsonify({'message': ''})
+
+
 @pipeline_bp.route('/<session_id>/parse-summary', methods=['POST'])
 def parse_summary(session_id):
     """让 Sparky 基于解析结果生成一句话总结"""
