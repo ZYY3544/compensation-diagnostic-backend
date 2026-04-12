@@ -203,6 +203,9 @@ def _detect_fields(columns: list) -> dict:
                     if kw.lower() in col_lower:
                         field_map[field_key] = col
                         break
+                else:
+                    continue
+                break  # 一列只匹配一个字段，防止 "年固定奖金" 同时被 fixed_bonus 和 variable_bonus 抢走
     return field_map
 
 
