@@ -125,6 +125,30 @@ def run_cleansing(session_id):
         sparky_message = parsed.get('sparky_message', '')
 
         # confidence 由 type 硬编码决定，不走 AI 判断
+        # 先把 AI 可能输出的 type 变体统一成标准值
+        TYPE_NORMALIZE = {
+            # 年化
+            'annualize_bonus': 'annualize_bonus',
+            'annualization': 'annualize_bonus',
+            'bonus_annualize': 'annualize_bonus',
+            'annualize': 'annualize_bonus',
+            # 13薪
+            'reclassify_13th': 'reclassify_13th',
+            '13th_month_reclassify': 'reclassify_13th',
+            '13th_reclassify': 'reclassify_13th',
+            'reclassify_13th_month': 'reclassify_13th',
+            # 绩效标准化
+            'standardize_performance': 'standardize_performance',
+            'performance_mapping': 'standardize_performance',
+            'performance_standardize': 'standardize_performance',
+            'performance_standardization': 'standardize_performance',
+            # 部门归并
+            'merge_department': 'merge_department',
+            'department_merge': 'merge_department',
+            # 城市归并
+            'merge_city': 'merge_city',
+            'city_merge': 'merge_city',
+        }
         HIGH_CONFIDENCE_TYPES = {
             'annualize_bonus',
             'reclassify_13th',
@@ -135,13 +159,16 @@ def run_cleansing(session_id):
         for i, m in enumerate(mutations):
             m.setdefault('id', i + 1)
             m.setdefault('reverted', False)
-            m['confidence'] = 'high' if m.get('type') in HIGH_CONFIDENCE_TYPES else 'low'
+            # 标准化 type
+            raw_type = m.get('type', '')
+            m['type'] = TYPE_NORMALIZE.get(raw_type, raw_type)
+            m['confidence'] = 'high' if m['type'] in HIGH_CONFIDENCE_TYPES else 'low'
             m['auto_applied'] = m['confidence'] == 'high' and m.get('new_value') is not None
 
-        # 日志：看 AI 返回了什么
+        # 日志：看 AI 返回了什么（含原始 type 和标准化后的）
         print(f'[Cleansing] AI returned {len(mutations)} mutations')
         for m in mutations:
-            print(f'  - row={m.get("row_number")} field={m.get("field")} old={m.get("old_value")} new={m.get("new_value")} conf={m.get("confidence")}')
+            print(f'  - row={m.get("row_number")} type_raw={raw_type} type={m.get("type")} field={m.get("field")} conf={m.get("confidence")} new={m.get("new_value")}')
 
         # Step 3: 校验 + 执行
         from app.services.mutation_engine import validate_mutations, apply_mutations
