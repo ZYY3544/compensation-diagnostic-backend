@@ -118,11 +118,19 @@ def run_cleansing(session_id):
         mutations = parsed.get('mutations', [])
         sparky_message = parsed.get('sparky_message', '')
 
-        # 给每条 mutation 补 id 和默认字段
+        # confidence 由 type 硬编码决定，不走 AI 判断
+        HIGH_CONFIDENCE_TYPES = {
+            'annualize_bonus',
+            'reclassify_13th',
+            'standardize_performance',
+            'merge_department',
+            'merge_city',
+        }
         for i, m in enumerate(mutations):
             m.setdefault('id', i + 1)
             m.setdefault('reverted', False)
-            m.setdefault('auto_applied', m.get('confidence') != 'low' and m.get('new_value') is not None)
+            m['confidence'] = 'high' if m.get('type') in HIGH_CONFIDENCE_TYPES else 'low'
+            m['auto_applied'] = m['confidence'] == 'high' and m.get('new_value') is not None
 
         # 日志：看 AI 返回了什么
         print(f'[Cleansing] AI returned {len(mutations)} mutations')
