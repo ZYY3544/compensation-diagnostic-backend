@@ -81,6 +81,195 @@ def run_analysis(session_id):
     return jsonify(report), 200
 
 
+# ======================================================================
+# AI 生成接口
+# ======================================================================
+
+@report_bp.route('/<session_id>/diagnosis-summary', methods=['POST'])
+def get_diagnosis_summary(session_id):
+    """AI 生成诊断摘要（opening + findings）"""
+    from app.api.sessions import sessions_store
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    report = session.get('analysis_results')
+    if not report:
+        return jsonify({'error': 'Analysis not complete'}), 400
+
+    interview_notes = session.get('interview_notes', {})
+
+    import os, json
+    if not os.getenv('OPENROUTER_API_KEY', '').strip():
+        return jsonify({
+            'opening': '诊断报告已生成，请查看右侧各模块详情。',
+            'findings': report.get('key_findings', []),
+        })
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.5)
+        system_prompt = agent.load_prompt('diagnosis_summary.txt')
+
+        # 构建摘要输入
+        modules = report.get('modules', {})
+        summary = {
+            'health_score': report.get('health_score'),
+            'key_findings_from_code': report.get('key_findings', []),
+            'external_competitiveness': {
+                'overall_cr': modules.get('external_competitiveness', {}).get('overall_cr'),
+                'below_p25': modules.get('external_competitiveness', {}).get('total_below_p25'),
+                'cr_by_function': modules.get('external_competitiveness', {}).get('cr_by_function', [])[:5],
+            },
+            'internal_equity': {
+                'high_dispersion': modules.get('internal_equity', {}).get('high_dispersion_count'),
+                'dispersion_summary': [
+                    {'grade': d['grade'], 'coeff': d['coefficient'], 'status': d['status']}
+                    for d in modules.get('internal_equity', {}).get('dispersion', [])[:5]
+                ],
+            },
+            'pay_performance': {
+                'a_vs_b_gap': modules.get('pay_performance', {}).get('a_vs_b_gap_pct'),
+                'spread_adequate': modules.get('pay_performance', {}).get('spread_adequate'),
+            },
+            'fix_variable': {
+                'overall_fix_pct': modules.get('fix_variable_ratio', {}).get('overall_fix_pct'),
+            },
+            'labor_cost': {
+                'kpi': modules.get('labor_cost', {}).get('kpi', {}),
+            },
+        }
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps({
+                'analysis_summary': summary,
+                'interview_notes': str(interview_notes)[:2000],
+            }, ensure_ascii=False)},
+        ]
+        response = agent.call_llm(messages)
+
+        if '```json' in response:
+            response = response.split('```json')[1].split('```')[0]
+        elif '```' in response:
+            response = response.split('```')[1].split('```')[0]
+
+        result = json.loads(response.strip())
+        return jsonify(result)
+
+    except Exception as e:
+        print(f'[Report] AI summary failed: {e}')
+        return jsonify({
+            'opening': '诊断报告已生成，请查看右侧各模块详情。',
+            'findings': report.get('key_findings', []),
+        })
+
+
+@report_bp.route('/<session_id>/module-insight', methods=['POST'])
+def get_module_insight(session_id):
+    """AI 生成单个模块的解读"""
+    from flask import request
+    from app.api.sessions import sessions_store
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    report = session.get('analysis_results')
+    if not report:
+        return jsonify({'error': 'Analysis not complete'}), 400
+
+    data = request.json or {}
+    module_key = data.get('module', '')
+    module_data = report.get('modules', {}).get(module_key, {})
+    interview_notes = session.get('interview_notes', {})
+
+    import os, json
+    if not os.getenv('OPENROUTER_API_KEY', '').strip():
+        return jsonify({'insight': ''})
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.5)
+        system_prompt = agent.load_prompt('module_insight.txt')
+
+        # 精简模块数据（去掉大列表，只保留统计数字）
+        slim_data = {k: v for k, v in module_data.items()
+                     if k not in ('cr_heatmap', 'deviation_matrix', 'boxplot', 'below_p25_detail', 'trend')}
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps({
+                'module': module_key,
+                'module_data': slim_data,
+                'diagnosis_summary': report.get('key_findings', [])[:3],
+                'interview_notes': str(interview_notes)[:1000],
+            }, ensure_ascii=False)},
+        ]
+        insight = agent.call_llm(messages).strip()
+        return jsonify({'insight': insight})
+
+    except Exception as e:
+        print(f'[Report] AI insight failed for {module_key}: {e}')
+        return jsonify({'insight': ''})
+
+
+@report_bp.route('/<session_id>/diagnosis-advice', methods=['POST'])
+def get_diagnosis_advice(session_id):
+    """AI 生成诊断建议"""
+    from app.api.sessions import sessions_store
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    report = session.get('analysis_results')
+    if not report:
+        return jsonify({'error': 'Analysis not complete'}), 400
+
+    interview_notes = session.get('interview_notes', {})
+
+    import os, json
+    if not os.getenv('OPENROUTER_API_KEY', '').strip():
+        return jsonify({'advice': [], 'closing': ''})
+
+    try:
+        from app.agents.base_agent import BaseAgent
+        agent = BaseAgent(temperature=0.5)
+        system_prompt = agent.load_prompt('diagnosis_advice.txt')
+
+        modules = report.get('modules', {})
+        summary = {
+            'health_score': report.get('health_score'),
+            'key_findings': report.get('key_findings', []),
+            'external_cr': modules.get('external_competitiveness', {}).get('overall_cr'),
+            'below_p25_count': modules.get('external_competitiveness', {}).get('total_below_p25'),
+            'high_dispersion_count': modules.get('internal_equity', {}).get('high_dispersion_count'),
+            'a_vs_b_gap': modules.get('pay_performance', {}).get('a_vs_b_gap_pct'),
+            'overall_fix_pct': modules.get('fix_variable_ratio', {}).get('overall_fix_pct'),
+            'cost_revenue_ratio': modules.get('labor_cost', {}).get('kpi', {}).get('cost_revenue_ratio'),
+        }
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps({
+                'analysis_summary': summary,
+                'interview_notes': str(interview_notes)[:2000],
+            }, ensure_ascii=False)},
+        ]
+        response = agent.call_llm(messages)
+
+        if '```json' in response:
+            response = response.split('```json')[1].split('```')[0]
+        elif '```' in response:
+            response = response.split('```')[1].split('```')[0]
+
+        result = json.loads(response.strip())
+        return jsonify(result)
+
+    except Exception as e:
+        print(f'[Report] AI advice failed: {e}')
+        return jsonify({'advice': [], 'closing': ''})
+
+
 def _calculate_health_score(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
     """综合健康分（0-100），基于各模块的核心指标"""
     scores = []
