@@ -41,6 +41,7 @@ def run_cleansing(session_id):
     if session.get('_ai_cleansing_done'):
         return jsonify({
             'cleansing_corrections': session.get('_merged_corrections', []),
+            'sparky_message': session.get('_cleansing_sparky', ''),
         })
 
     code_results = session.get('_code_results')
@@ -84,7 +85,10 @@ def run_cleansing(session_id):
                 "- type 可选：annualize_bonus, extreme_value, 13th_month_reclassify, "
                 "salary_inversion, performance_mapping, department_merge, lti_suspect, "
                 "allowance_high, date_anomaly\n"
-                "- 只输出 JSON，不要其他文字"
+                "- 只输出 JSON，不要其他文字\n\n"
+                "输出格式：\n"
+                '{"corrections": [{"id": 1, "description": "...", "type": "..."}], '
+                '"sparky_message": "2-3句自然口语总结清洗结果，告诉用户发现了什么问题、做了什么处理，提醒看右边详情"}'
             )},
             {"role": "user", "content": json.dumps(prompt_data, ensure_ascii=False, indent=2)},
         ]
@@ -95,9 +99,16 @@ def run_cleansing(session_id):
             response = response.split('```json')[1].split('```')[0]
         elif '```' in response:
             response = response.split('```')[1].split('```')[0]
-        corrections = json.loads(response.strip())
-        if not isinstance(corrections, list):
+        parsed = json.loads(response.strip())
+        if isinstance(parsed, dict):
+            corrections = parsed.get('corrections', [])
+            sparky_message = parsed.get('sparky_message', '')
+        elif isinstance(parsed, list):
+            corrections = parsed
+            sparky_message = ''
+        else:
             corrections = []
+            sparky_message = ''
     except Exception as e:
         print(f'[Pipeline] AI cleansing failed: {e}')
         import traceback
@@ -106,10 +117,11 @@ def run_cleansing(session_id):
 
     session['_merged_corrections'] = corrections
     session['_ai_cleansing_done'] = True
+    session['_cleansing_sparky'] = sparky_message
     if session.get('parse_result'):
         session['parse_result']['cleansing_corrections'] = corrections
 
-    return jsonify({'cleansing_corrections': corrections})
+    return jsonify({'cleansing_corrections': corrections, 'sparky_message': sparky_message})
 
 
 @pipeline_bp.route('/<session_id>/grade-match', methods=['POST'])
