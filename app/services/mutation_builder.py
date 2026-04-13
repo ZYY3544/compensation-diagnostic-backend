@@ -74,8 +74,8 @@ def build_mutations_from_code(
             'id': next_id(), 'row_number': item['row_number'],
             'field': 'variable_bonus', 'old_value': old, 'new_value': new,
             'type': 'annualize_bonus', 'confidence': 'high',
-            'auto_applied': True, 'reverted': False, 'description': '',
-            'context': f"入司{item.get('join_date','')}，在职约{months}个月",
+            'auto_applied': True, 'reverted': False,
+            'description': f"第{item['row_number']}行年终奖从 {old} 年化为 {new}（在职{months}个月）",
         })
     annualize_count = sum(1 for m in mutations if m['type'] == 'annualize_bonus')
     if annualize_count:
@@ -96,8 +96,8 @@ def build_mutations_from_code(
             'id': next_id(), 'row_number': item['row_number'],
             'field': 'fixed_bonus', 'old_value': old_fixed, 'new_value': new_fixed,
             'type': 'reclassify_13th', 'confidence': 'high',
-            'auto_applied': True, 'reverted': False, 'description': '',
-            'context': f"年终奖含1个月工资{monthly}，已拆分到固定薪酬",
+            'auto_applied': True, 'reverted': False,
+            'description': f"第{item['row_number']}行13薪 {monthly} 已从年终奖口径移入固定薪酬（{old_fixed} → {new_fixed}）",
         })
     reclassify_count = sum(1 for m in mutations if m['type'] == 'reclassify_13th')
     if reclassify_count:
@@ -117,8 +117,8 @@ def build_mutations_from_code(
                         'id': next_id(), 'row_number': emp['row_number'],
                         'field': 'performance', 'old_value': perf, 'new_value': mapping[perf],
                         'type': 'standardize_performance', 'confidence': 'high',
-                        'auto_applied': True, 'reverted': False, 'description': '',
-                        'context': f"{perf} → {mapping[perf]}",
+                        'auto_applied': True, 'reverted': False,
+                        'description': f'第{emp["row_number"]}行绩效从 "{perf}" 标准化为 "{mapping[perf]}"',
                     })
                     perf_count += 1
             if perf_count:
@@ -136,8 +136,8 @@ def build_mutations_from_code(
                     'id': next_id(), 'row_number': emp['row_number'],
                     'field': 'department', 'old_value': dept, 'new_value': dept_merge[dept],
                     'type': 'merge_department', 'confidence': 'high',
-                    'auto_applied': True, 'reverted': False, 'description': '',
-                    'context': f"{dept} → {dept_merge[dept]}",
+                    'auto_applied': True, 'reverted': False,
+                    'description': f'第{emp["row_number"]}行部门从 "{dept}" 归并为 "{dept_merge[dept]}"',
                 })
                 dept_count += 1
         if dept_count:
@@ -155,8 +155,8 @@ def build_mutations_from_code(
                     'id': next_id(), 'row_number': emp['row_number'],
                     'field': 'city', 'old_value': city, 'new_value': city_merge[city],
                     'type': 'merge_city', 'confidence': 'high',
-                    'auto_applied': True, 'reverted': False, 'description': '',
-                    'context': f"{city} → {city_merge[city]}",
+                    'auto_applied': True, 'reverted': False,
+                    'description': f'第{emp["row_number"]}行城市从 "{city}" 归并为 "{city_merge[city]}"',
                 })
                 city_count += 1
         if city_count:
@@ -165,33 +165,40 @@ def build_mutations_from_code(
     # --- 低置信度（仅标记）---
 
     for item in (code_results.get('salary_outliers') or []):
+        grade = item.get('grade', '')
+        median = item.get('median', 0)
+        ratio = item.get('ratio', 0)
         mutations.append({
             'id': next_id(), 'row_number': item['row_number'],
             'field': 'base_annual', 'old_value': item['value'], 'new_value': None,
             'type': 'extreme_value_salary', 'confidence': 'low',
-            'auto_applied': False, 'reverted': False, 'description': '',
-            'context': f"月薪{item['value']}偏离同级({item.get('grade','')})中位值{item.get('median',0):.0f}，比值={item.get('ratio',0):.1f}",
+            'auto_applied': False, 'reverted': False,
+            'description': f"第{item['row_number']}行月度基本工资 {item['value']}，偏离同职级{grade}中位值 {median:.0f}（{ratio:.1f}倍），需确认",
         })
     sal_outlier_count = sum(1 for m in mutations if m['type'] == 'extreme_value_salary')
     if sal_outlier_count:
         summary_lines.append(f"标记: {sal_outlier_count}项月薪异常值需人工确认")
 
     for item in (code_results.get('bonus_outliers') or []):
+        median = item.get('median', 0)
+        ratio = item.get('ratio', 0)
         mutations.append({
             'id': next_id(), 'row_number': item['row_number'],
             'field': 'variable_bonus', 'old_value': item['value'], 'new_value': None,
             'type': 'extreme_value_bonus', 'confidence': 'low',
-            'auto_applied': False, 'reverted': False, 'description': '',
-            'context': f"年终奖{item['value']}偏离同级中位值{item.get('median',0):.0f}",
+            'auto_applied': False, 'reverted': False,
+            'description': f"第{item['row_number']}行年终奖 {item['value']}，偏离同职级中位值 {median:.0f}（{ratio:.1f}倍），需确认",
         })
 
     for item in (code_results.get('salary_inversions') or []):
+        sup_salary = item.get('supervisor_salary', 0)
+        sup_id = item.get('supervisor_id', '')
         mutations.append({
             'id': next_id(), 'row_number': item['row_number'],
             'field': 'base_annual', 'old_value': item['value'], 'new_value': None,
             'type': 'salary_inversion', 'confidence': 'low',
-            'auto_applied': False, 'reverted': False, 'description': '',
-            'context': item.get('issue', ''),
+            'auto_applied': False, 'reverted': False,
+            'description': f"第{item['row_number']}行月薪 {item['value']} 高于其上级（{sup_id}）月薪 {sup_salary}，存在薪酬倒挂",
         })
 
     for item in (code_results.get('future_dates') or []) + (code_results.get('old_dates') or []):
@@ -199,8 +206,8 @@ def build_mutations_from_code(
             'id': next_id(), 'row_number': item['row_number'],
             'field': 'hire_date', 'old_value': str(item.get('value', '')), 'new_value': None,
             'type': 'date_anomaly', 'confidence': 'low',
-            'auto_applied': False, 'reverted': False, 'description': '',
-            'context': item.get('issue', ''),
+            'auto_applied': False, 'reverted': False,
+            'description': f"第{item['row_number']}行入司时间 {item.get('value', '')} 异常，需确认",
         })
 
     for item in (code_results.get('allowance_alerts') or []):
@@ -208,8 +215,8 @@ def build_mutations_from_code(
             'id': next_id(), 'row_number': item['row_number'],
             'field': 'cash_allowance', 'old_value': item.get('value'), 'new_value': None,
             'type': 'extreme_value_allowance', 'confidence': 'low',
-            'auto_applied': False, 'reverted': False, 'description': '',
-            'context': item.get('issue', ''),
+            'auto_applied': False, 'reverted': False,
+            'description': f"第{item['row_number']}行月度津贴 {item.get('value', '')} 超过月薪30%，需确认",
         })
 
     low_count = sum(1 for m in mutations if m['confidence'] == 'low')

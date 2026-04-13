@@ -90,59 +90,24 @@ def run_cleansing(session_id):
             session['_ai_cleansing_done'] = True
             return jsonify({'cleansing_corrections': [], 'sparky_message': '数据质量很好，不需要修正。', 'has_export': False})
 
-        # Step 2: AI 只写文案（input 很小：只传 mutation 摘要）
-        sparky_message = summary_text  # fallback
+        # Step 2: AI 只生成 sparky_message（左侧对话总结），右侧文案已由代码模板生成
+        sparky_message = summary_text
         if _has_api_key():
             try:
                 from app.agents.base_agent import BaseAgent
-                writer = BaseAgent(temperature=0.3)
-                system_prompt = writer.load_prompt('cleansing_descriptions.txt')
-
-                mutations_summary = [
-                    {'id': m['id'], 'type': m['type'], 'row_number': m['row_number'],
-                     'field': m['field'], 'old_value': m['old_value'], 'new_value': m['new_value'],
-                     'confidence': m['confidence'], 'context': m.get('context', '')}
-                    for m in mutations
-                ]
-                prompt_data = {
-                    'mutations_summary': mutations_summary,
-                    'overall_summary': summary_text,
-                }
+                writer = BaseAgent(temperature=0.5)
                 messages = [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": json.dumps(prompt_data, ensure_ascii=False, cls=_SafeEncoder)},
+                    {"role": "system", "content": (
+                        "你是 Sparky，铭曦产品的 AI 薪酬诊断助手。"
+                        "系统刚完成了数据清洗。请根据下面的清洗摘要，"
+                        "用 2-3 句自然口语告诉用户做了什么处理、有哪些需要确认的。"
+                        "语气轻松专业，不要用 markdown 格式。"
+                    )},
+                    {"role": "user", "content": summary_text},
                 ]
-                response = writer.call_llm(messages)
-
-                if '```json' in response:
-                    response = response.split('```json')[1].split('```')[0]
-                elif '```' in response:
-                    response = response.split('```')[1].split('```')[0]
-
-                ai_result = json.loads(response.strip())
-                descriptions = ai_result.get('descriptions', {})
-                for m in mutations:
-                    desc = descriptions.get(str(m['id']), '')
-                    if desc:
-                        m['description'] = desc
-                # 校验：AI 遗漏的 ID 用 context 补上
-                for m in mutations:
-                    if not m.get('description'):
-                        m['description'] = m.get('context', '')
-                sparky_message = ai_result.get('sparky_message', summary_text)
-                missing = sum(1 for m in mutations if m['description'] == m.get('context', ''))
-                if missing:
-                    print(f'[Cleansing] AI missed {missing}/{len(mutations)} descriptions, filled with context')
+                sparky_message = writer.call_llm(messages).strip() or summary_text
             except Exception as e:
-                print(f'[Cleansing] AI description failed (using fallback): {e}')
-                for m in mutations:
-                    if not m['description']:
-                        m['description'] = m.get('context', '')
-
-        else:
-            # 没有 API key，用 context 作为 description
-            for m in mutations:
-                m['description'] = m.get('context', '')
+                print(f'[Cleansing] AI sparky_message failed: {e}')
 
         # Step 3: 校验 + 执行高置信度修改
         from app.services.mutation_engine import validate_mutations, apply_mutations
