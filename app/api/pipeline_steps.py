@@ -245,25 +245,125 @@ def run_grade_match(session_id):
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
-    if session.get('_grade_match_done'):
-        return jsonify({'grade_matching': session.get('grade_matching', [])})
 
-    from app.services.pipeline import _run_grade_matching, _fallback_grade_matching
+    # 缓存
+    if session.get('_grade_match_done'):
+        return jsonify(session.get('_grade_match_result', {}))
+
+    from app.services.grade_matcher import (
+        STANDARD_GRADES, STANDARD_GRADE_DEFINITIONS,
+        build_grade_match_data, ai_match_grades, ai_suggest_adjustments,
+    )
     grades_list = session.get('_grades_list', [])
     employees = session.get('_employees', [])
-    field_map = session.get('_field_map', {})
-    code_results = session.get('_code_results')
 
-    if not _has_api_key():
-        grade_matching = _fallback_grade_matching(grades_list)
-    else:
-        grade_matching = _run_grade_matching(grades_list, employees, [], field_map, code_results)
+    # Step 1: 代码统计 + 信号检测
+    data = build_grade_match_data(employees, grades_list)
 
-    session['grade_matching'] = grade_matching
+    # Step 2: AI #1 — 职级映射（输入小）
+    grade_mapping = {}
+    if _has_api_key() and grades_list:
+        try:
+            grade_mapping = ai_match_grades(grades_list)
+        except Exception as e:
+            print(f'[GradeMatch] AI mapping failed: {e}')
+
+    # 没映射到的用默认值
+    for g in grades_list:
+        if g not in grade_mapping:
+            grade_mapping[g] = '中级专业人员'
+
+    # Step 3: AI #2 — 调整建议（只传有信号的人）
+    suggestions = []
+    if _has_api_key() and data['employees_with_signals']:
+        try:
+            suggestions = ai_suggest_adjustments(data['employees_with_signals'], grade_mapping)
+        except Exception as e:
+            print(f'[GradeMatch] AI suggestions failed: {e}')
+
+    # 构建建议索引
+    suggestion_map = {s['id']: s for s in suggestions}
+
+    # 组装返回结果
+    grade_table = []
+    for gs in data['grade_stats']:
+        g = gs['company_grade']
+        grade_table.append({
+            'company_grade': g,
+            'count': gs['count'],
+            'standard_grade': grade_mapping.get(g, ''),
+            'status': 'matched',
+        })
+
+    employees_by_grade = {}
+    for g, emps in data['all_employees_by_grade'].items():
+        std_grade = grade_mapping.get(g, '')
+        emp_list = []
+        for e in emps:
+            sug = suggestion_map.get(e['id'])
+            signals = [s for ews in data['employees_with_signals'] if ews['id'] == e['id'] for s in ews['signals']]
+            emp_list.append({
+                'row_number': e['row_number'],
+                'id': e['id'],
+                'job_title': e['job_title'],
+                'performance': e['performance'],
+                'mapped_grade': std_grade,
+                'suggested_grade': sug['suggested_grade'] if sug else None,
+                'adjust_reason': sug['reason'] if sug else None,
+                'signals': [s['reason'] for s in signals],
+                'has_suggestion': bool(sug or signals),
+            })
+        # 有建议的排前面
+        emp_list.sort(key=lambda x: (0 if x['has_suggestion'] else 1))
+        suggestion_count = sum(1 for e in emp_list if e['has_suggestion'])
+        employees_by_grade[g] = {
+            'employees': emp_list,
+            'suggestion_count': suggestion_count,
+            'total': len(emp_list),
+        }
+
+    # Sparky 消息
+    total_suggestions = sum(v['suggestion_count'] for v in employees_by_grade.values())
+    sparky_message = f"职级映射已完成，{len(grades_list)} 个职级都对应上了标准体系。"
+    if total_suggestions > 0:
+        sparky_message += f"另外有 {total_suggestions} 名员工根据绩效和岗位情况，建议调整对标级别，请一起确认。"
+
+    if _has_api_key():
+        try:
+            from app.agents.base_agent import BaseAgent
+            agent = BaseAgent(temperature=0.5)
+            messages = [
+                {"role": "system", "content": (
+                    "你是 Sparky，铭曦产品的 AI 薪酬诊断助手。"
+                    "系统刚完成了职级匹配。请根据下面的摘要用 2-3 句自然口语告诉用户情况。"
+                    "语气轻松专业，不要用 markdown。"
+                )},
+                {"role": "user", "content": sparky_message},
+            ]
+            sparky_message = agent.call_llm(messages).strip() or sparky_message
+        except:
+            pass
+
+    result = {
+        'grade_table': grade_table,
+        'employees_by_grade': employees_by_grade,
+        'standard_grades': STANDARD_GRADES,
+        'standard_grade_definitions': STANDARD_GRADE_DEFINITIONS,
+        'sparky_message': sparky_message,
+    }
+
+    session['_grade_match_result'] = result
     session['_grade_match_done'] = True
+    # 向后兼容旧格式
+    session['grade_matching'] = [
+        {'client_grade': g['company_grade'], 'standard_grade': g['standard_grade'],
+         'confidence': 'high', 'confirmed': True}
+        for g in grade_table
+    ]
     if session.get('parse_result'):
-        session['parse_result']['grade_matching'] = grade_matching
-    return jsonify({'grade_matching': grade_matching})
+        session['parse_result']['grade_matching'] = session['grade_matching']
+
+    return jsonify(result)
 
 
 # ======================================================================
