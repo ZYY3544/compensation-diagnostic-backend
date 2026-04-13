@@ -71,115 +71,76 @@ def run_cleansing(session_id):
     field_map = session.get('_field_map', {})
     column_names = session.get('_column_names', [])
 
-    if not code_results or not _has_api_key():
+    if not code_results:
         session['_ai_cleansing_done'] = True
         session['_mutations'] = []
-        return jsonify({'cleansing_corrections': [], 'sparky_message': '', 'has_export': False})
+        return jsonify({'cleansing_corrections': [], 'sparky_message': '数据质量很好，不需要修正。', 'has_export': False})
 
     try:
-        # 一次 LLM 调用：直接生成结构化修改指令（不再单独调 CleansingAgent）
-        from app.agents.base_agent import BaseAgent
-        writer = BaseAgent(temperature=0.3)
-        system_prompt = writer.load_prompt('cleansing_mutations.txt')
+        # Step 1: 代码算 mutation（确定性，不调 AI）
+        from app.services.mutation_builder import build_mutations_from_code
+        mutations, summary_text = build_mutations_from_code(code_results, employees, field_map)
 
-        # 只传有问题的行的数据，控制 prompt 大小
-        flagged_rows = set()
-        for key in ('needs_annualize', 'salary_outliers', 'bonus_outliers',
-                     'possible_13th_overlap', 'salary_inversions',
-                     'allowance_alerts', 'future_dates', 'old_dates'):
-            for item in (code_results.get(key) or []):
-                rn = item.get('row_number') or item.get('row')
-                if rn:
-                    flagged_rows.add(rn)
-
-        employee_context = []
-        for emp in employees:
-            if emp.get('row_number') in flagged_rows:
-                employee_context.append({
-                    k: v for k, v in emp.items()
-                    if k in ('row_number', 'id', 'job_title', 'grade', 'department',
-                             'base_annual', 'fixed_bonus', 'variable_bonus',
-                             'performance', 'hire_date')
-                })
-
-        # 精简 code_results，去掉大体积字段
-        slim_results = {
-            k: v for k, v in code_results.items()
-            if k not in ('sample_rows', 'data_summary', 'field_mapping') and v
-        }
-
-        prompt_data = {
-            'code_detections': slim_results,
-            'flagged_employees': employee_context,
-            'performance_values': code_results.get('performance_values', []),
-            'unique_departments': code_results.get('unique_departments', []),
-        }
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(prompt_data, ensure_ascii=False, indent=2, cls=_SafeEncoder)},
-        ]
-        response = writer.call_llm(messages)
-
-        if '```json' in response:
-            response = response.split('```json')[1].split('```')[0]
-        elif '```' in response:
-            response = response.split('```')[1].split('```')[0]
-
-        parsed = json.loads(response.strip())
-        mutations = parsed.get('mutations', [])
-        sparky_message = parsed.get('sparky_message', '')
-
-        # confidence 由 type 硬编码决定，不走 AI 判断
-        # 先把 AI 可能输出的 type 变体统一成标准值
-        TYPE_NORMALIZE = {
-            # 年化
-            'annualize_bonus': 'annualize_bonus',
-            'annualization': 'annualize_bonus',
-            'bonus_annualize': 'annualize_bonus',
-            'annualize': 'annualize_bonus',
-            # 13薪
-            'reclassify_13th': 'reclassify_13th',
-            '13th_month_reclassify': 'reclassify_13th',
-            '13th_reclassify': 'reclassify_13th',
-            'reclassify_13th_month': 'reclassify_13th',
-            # 绩效标准化
-            'standardize_performance': 'standardize_performance',
-            'performance_mapping': 'standardize_performance',
-            'performance_standardize': 'standardize_performance',
-            'performance_standardization': 'standardize_performance',
-            # 部门归并
-            'merge_department': 'merge_department',
-            'department_merge': 'merge_department',
-            # 城市归并
-            'merge_city': 'merge_city',
-            'city_merge': 'merge_city',
-        }
-        HIGH_CONFIDENCE_TYPES = {
-            'annualize_bonus',
-            'reclassify_13th',
-            'standardize_performance',
-            'merge_department',
-            'merge_city',
-        }
-        for i, m in enumerate(mutations):
-            m.setdefault('id', i + 1)
-            m.setdefault('reverted', False)
-            # 标准化 type
-            raw_type = m.get('type', '')
-            m['type'] = TYPE_NORMALIZE.get(raw_type, raw_type)
-            m['confidence'] = 'high' if m['type'] in HIGH_CONFIDENCE_TYPES else 'low'
-            m['auto_applied'] = m['confidence'] == 'high' and m.get('new_value') is not None
-
-        # 日志：看 AI 返回了什么（含原始 type 和标准化后的）
-        print(f'[Cleansing] AI returned {len(mutations)} mutations')
+        print(f'[Cleansing] code built {len(mutations)} mutations')
         for m in mutations:
-            print(f'  - row={m.get("row_number")} type_raw={raw_type} type={m.get("type")} field={m.get("field")} conf={m.get("confidence")} new={m.get("new_value")}')
+            print(f'  - id={m["id"]} type={m["type"]} row={m["row_number"]} conf={m["confidence"]} new={m.get("new_value")}')
 
-        # Step 3: 校验 + 执行
+        if not mutations:
+            session['_mutations'] = []
+            session['_ai_cleansing_done'] = True
+            return jsonify({'cleansing_corrections': [], 'sparky_message': '数据质量很好，不需要修正。', 'has_export': False})
+
+        # Step 2: AI 只写文案（input 很小：只传 mutation 摘要）
+        sparky_message = summary_text  # fallback
+        if _has_api_key():
+            try:
+                from app.agents.base_agent import BaseAgent
+                writer = BaseAgent(temperature=0.3)
+                system_prompt = writer.load_prompt('cleansing_descriptions.txt')
+
+                mutations_summary = [
+                    {'id': m['id'], 'type': m['type'], 'row_number': m['row_number'],
+                     'field': m['field'], 'old_value': m['old_value'], 'new_value': m['new_value'],
+                     'confidence': m['confidence'], 'context': m.get('context', '')}
+                    for m in mutations
+                ]
+                prompt_data = {
+                    'mutations_summary': mutations_summary,
+                    'overall_summary': summary_text,
+                }
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": json.dumps(prompt_data, ensure_ascii=False, cls=_SafeEncoder)},
+                ]
+                response = writer.call_llm(messages)
+
+                if '```json' in response:
+                    response = response.split('```json')[1].split('```')[0]
+                elif '```' in response:
+                    response = response.split('```')[1].split('```')[0]
+
+                ai_result = json.loads(response.strip())
+                descriptions = ai_result.get('descriptions', {})
+                for m in mutations:
+                    desc = descriptions.get(str(m['id']), '')
+                    if desc:
+                        m['description'] = desc
+                sparky_message = ai_result.get('sparky_message', summary_text)
+            except Exception as e:
+                print(f'[Cleansing] AI description failed (using fallback): {e}')
+                # AI 写文案失败，用 context 作为 description
+                for m in mutations:
+                    if not m['description']:
+                        m['description'] = m.get('context', '')
+
+        else:
+            # 没有 API key，用 context 作为 description
+            for m in mutations:
+                m['description'] = m.get('context', '')
+
+        # Step 3: 校验 + 执行高置信度修改
         from app.services.mutation_engine import validate_mutations, apply_mutations
         mutations = validate_mutations(mutations, employees, field_map)
-        print(f'[Cleansing] after validation: {len(mutations)} mutations')
         auto = [m for m in mutations if m.get('auto_applied')]
         apply_mutations(employees, auto, field_map)
 
@@ -199,7 +160,7 @@ def run_cleansing(session_id):
         session['cleaned_employees'] = employees
 
     except Exception as e:
-        print(f'[Pipeline] AI cleansing failed: {e}')
+        print(f'[Pipeline] cleansing failed: {e}')
         traceback.print_exc()
         mutations = []
         sparky_message = ''
