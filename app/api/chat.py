@@ -23,6 +23,9 @@ def chat(session_id):
     history = session.setdefault('chat_history', [])
     history.append({'role': 'user', 'text': user_message})
 
+    # 检测跳转意图
+    navigate_to = _detect_module_navigation(user_message)
+
     try:
         from app.agents.sparky_agent import SparkyAgent
         agent = SparkyAgent()
@@ -33,7 +36,27 @@ def chat(session_id):
 
     history.append({'role': 'assistant', 'text': response_text})
 
-    return jsonify({'response': '\n'.join(line.strip() for line in response_text.split('\n'))})
+    resp = {'response': '\n'.join(line.strip() for line in response_text.split('\n'))}
+    if navigate_to:
+        resp['navigate_to'] = navigate_to
+    return jsonify(resp)
+
+
+def _detect_module_navigation(message: str) -> str | None:
+    """检测用户消息是否包含模块跳转意图"""
+    msg = message.lower()
+    nav_map = {
+        'external_competitiveness': ['外部竞争', '竞争力', '市场对标', 'cr', 'compa'],
+        'internal_equity': ['内部公平', '公平性', '离散', '同岗不同酬'],
+        'pay_performance': ['绩效', '绩效关联', '绩效薪酬', '激励'],
+        'fix_variable_ratio': ['固浮比', '薪酬结构', '固定浮动', 'pay mix'],
+        'labor_cost': ['人工成本', '成本趋势', '人效', '成本占比'],
+    }
+    for module, keywords in nav_map.items():
+        for kw in keywords:
+            if kw in msg:
+                return module
+    return None
 
 
 @chat_bp.route('/<session_id>/extract', methods=['POST'])
