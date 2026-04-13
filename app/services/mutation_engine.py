@@ -57,7 +57,7 @@ def validate_mutations(mutations: list, employees: list, field_map: dict) -> lis
     valid_fields = set(field_map.keys()) | {
         'base_annual', 'base_monthly', 'fixed_bonus', 'variable_bonus',
         'cash_allowance', 'reimbursement', 'tcc', 'annual_bonus',
-        'performance', 'department', 'grade', 'job_title', 'hire_date',
+        'performance', 'department', 'grade', 'job_title', 'hire_date', 'city',
     }
     for m in mutations:
         if not m.get('row_number') or not m.get('field'):

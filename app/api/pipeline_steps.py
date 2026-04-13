@@ -52,6 +52,12 @@ def run_cleansing(session_id):
             'has_export': bool(session.get('_cleansed_excel_path')),
         })
 
+    # 确保 snapshot 已创建（防御性）
+    if not session.get('_snapshot_done'):
+        import copy
+        session['_employees_original'] = copy.deepcopy(session.get('_employees', []))
+        session['_snapshot_done'] = True
+
     code_results = session.get('_code_results')
     employees = session.get('_employees', [])
     field_map = session.get('_field_map', {})

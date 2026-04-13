@@ -64,6 +64,7 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
             'performance': _get_mapped(d, field_map, 'performance') or '',
             'hire_date': str(_get_mapped(d, field_map, 'hire_date') or ''),
             'manager': _get_mapped(d, field_map, 'manager') or '',
+            'city': _get_mapped(d, field_map, 'city') or '',
         }
         employees.append(emp)
 

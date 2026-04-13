@@ -10,9 +10,17 @@ WARNING_FILL = PatternFill(start_color='FFFDE68A', end_color='FFFDE68A', fill_ty
 REVERTED_FILL = PatternFill(start_color='FFCCCCCC', end_color='FFCCCCCC', fill_type='solid')   # 灰色：已撤回
 
 
+# employee dict key → field_map key（两套命名不一致的地方）
+_FIELD_ALIASES = {
+    'base_annual': 'base_salary',
+    'base_monthly': 'base_salary',
+}
+
+
 def _col_index(field: str, field_map: dict, column_names: list) -> int:
     """标准字段名 → Excel 列号（1-based）。找不到返回 -1。"""
-    col_name = field_map.get(field)
+    mapped = _FIELD_ALIASES.get(field, field)
+    col_name = field_map.get(mapped)
     if col_name and col_name in column_names:
         return column_names.index(col_name) + 1
     return -1
