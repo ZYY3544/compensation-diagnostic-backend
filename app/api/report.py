@@ -1,10 +1,10 @@
 """
-诊断报告编排：
+诊断报告编排 + AI 生成 + PDF 导出：
 1. 跑 5 个分析引擎（纯代码计算）
 2. 生成结构化结果供前端图表使用
 3. AI 生成诊断摘要、模块解读、行动建议（Phase 3）
 """
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, make_response
 from app.services.market_data import lookup_market_salary
 
 report_bp = Blueprint('report', __name__)
@@ -367,3 +367,26 @@ def _generate_key_findings(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
     findings.sort(key=lambda f: priority_order.get(f['priority'], 9))
 
     return findings[:5]
+
+
+@report_bp.route('/<session_id>/export-pdf', methods=['GET'])
+def export_pdf(session_id):
+    """导出诊断报告 PDF"""
+    from app.api.sessions import sessions_store
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    report = session.get('analysis_results')
+    if not report:
+        return jsonify({'error': 'Analysis not complete'}), 400
+
+    advice = session.get('_diagnosis_advice')
+
+    from app.services.pdf_exporter import generate_report_pdf
+    pdf_bytes = generate_report_pdf(report, advice)
+
+    response = make_response(pdf_bytes)
+    response.headers['Content-Type'] = 'application/pdf'
+    response.headers['Content-Disposition'] = 'attachment; filename=compensation_diagnosis_report.pdf'
+    return response
