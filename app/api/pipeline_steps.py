@@ -125,10 +125,16 @@ def run_cleansing(session_id):
                     desc = descriptions.get(str(m['id']), '')
                     if desc:
                         m['description'] = desc
+                # 校验：AI 遗漏的 ID 用 context 补上
+                for m in mutations:
+                    if not m.get('description'):
+                        m['description'] = m.get('context', '')
                 sparky_message = ai_result.get('sparky_message', summary_text)
+                missing = sum(1 for m in mutations if m['description'] == m.get('context', ''))
+                if missing:
+                    print(f'[Cleansing] AI missed {missing}/{len(mutations)} descriptions, filled with context')
             except Exception as e:
                 print(f'[Cleansing] AI description failed (using fallback): {e}')
-                # AI 写文案失败，用 context 作为 description
                 for m in mutations:
                     if not m['description']:
                         m['description'] = m.get('context', '')
