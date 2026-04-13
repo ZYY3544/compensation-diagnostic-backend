@@ -10,6 +10,26 @@ from flask import Blueprint, jsonify, request
 pipeline_bp = Blueprint('pipeline', __name__)
 
 
+@pipeline_bp.route('/<session_id>/snapshot', methods=['POST'])
+def create_snapshot(session_id):
+    """复制一份原始数据，后续清洗/匹配/分析都在副本上操作"""
+    from app.api.sessions import sessions_store
+    import copy
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    if session.get('_snapshot_done'):
+        return jsonify({'status': 'ok', 'message': 'already snapshotted'})
+
+    # 深拷贝原始数据
+    session['_employees_original'] = copy.deepcopy(session.get('_employees', []))
+    session['_parse_result_original'] = copy.deepcopy(session.get('parse_result', {}))
+    session['_snapshot_done'] = True
+
+    return jsonify({'status': 'ok'})
+
+
 @pipeline_bp.route('/<session_id>/cleansing', methods=['POST'])
 def run_cleansing(session_id):
     from app.api.sessions import sessions_store
