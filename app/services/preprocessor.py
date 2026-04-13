@@ -25,11 +25,18 @@ FIELD_ALIASES = {
 
 
 def _resolve_field(column_names: list, standard_key: str) -> str | None:
-    """在实际列名中查找标准字段对应的列名，精确匹配"""
+    """在实际列名中查找标准字段对应的列名，先精确匹配再包含匹配"""
     aliases = FIELD_ALIASES.get(standard_key, [])
+    # 精确匹配
     for alias in aliases:
         if alias in column_names:
             return alias
+    # 包含匹配（如 "年终奖" 匹配 "年终奖（年度）"）
+    for col in column_names:
+        col_lower = col.lower() if col else ''
+        for alias in aliases:
+            if alias.lower() in col_lower:
+                return col
     return None
 
 
@@ -295,7 +302,13 @@ def run_code_checks(parsed_data: dict) -> dict:
     # -----------------------------------------------------------------------
     if col['join_date'] and col['bonus'] and col['grade']:
         today = date.today()
-        data_year = today.year  # 假定数据年度为当前年
+        # 推断数据年度：取所有入司时间中最晚的年份（而非硬编码当前年）
+        all_dates = []
+        for r in rows:
+            d = _parse_date(r['data'].get(col['join_date']))
+            if d and d.year <= today.year:
+                all_dates.append(d)
+        data_year = max(d.year for d in all_dates) if all_dates else today.year
         year_start = date(data_year, 1, 1)
         bonus_groups = _group_by_grade(rows, col['grade'], col['bonus'])
         grade_medians = {}
