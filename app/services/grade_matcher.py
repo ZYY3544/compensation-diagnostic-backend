@@ -7,21 +7,48 @@
 import json
 import re
 
-# 铭曦标准职级体系（7 级）
-STANDARD_GRADES = [
-    '初级专业人员', '中级专业人员', '高级专业人员',
-    '专家/经理', '资深专家/高级经理', '总监', '高管',
+# 铭曦标准职级体系（基于 OrgChart，7 个大级 × 2 个子级）
+# 区块一下拉框用大级（Level 1 - Level 7）
+# 区块二调整建议用子级（Level 1-1, Level 1-2, ...）
+STANDARD_LEVELS = [
+    'Level 1', 'Level 2', 'Level 3', 'Level 4',
+    'Level 5', 'Level 6', 'Level 7',
 ]
 
-STANDARD_GRADE_DEFINITIONS = {
-    '初级专业人员': '入门级岗位，需要指导和监督完成基础工作，通常 0-2 年经验',
-    '中级专业人员': '能独立完成本职工作，具备一定专业深度，通常 2-5 年经验',
-    '高级专业人员': '在专业领域有较强能力，能指导他人，可独立承担复杂任务，通常 5-8 年经验',
-    '专家/经理': '专业领域专家或团队管理者，能影响部门决策，通常 8-12 年经验',
-    '资深专家/高级经理': '跨领域资深专家或大团队管理者，对业务有重大影响，通常 12+ 年经验',
-    '总监': '部门/事业部负责人，制定战略方向，管理多个团队',
-    '高管': 'VP/SVP/C-level，公司级决策者',
+STANDARD_SUB_LEVELS = [
+    'Level 1-1', 'Level 1-2',
+    'Level 2-1', 'Level 2-2',
+    'Level 3-1', 'Level 3-2',
+    'Level 4-1', 'Level 4-2',
+    'Level 5-1', 'Level 5-2',
+    'Level 6-1', 'Level 6-2',
+    'Level 7-1', 'Level 7-2',
+]
+
+# Hay 职级对照
+HAY_GRADE_MAP = {
+    'Level 1-1': 8, 'Level 1-2': 9,
+    'Level 2-1': 10, 'Level 2-2': 11,
+    'Level 3-1': 12, 'Level 3-2': 13,
+    'Level 4-1': 14, 'Level 4-2': 15,
+    'Level 5-1': 16, 'Level 5-2': 17,
+    'Level 6-1': 18, 'Level 6-2': 19,
+    'Level 7-1': 20, 'Level 7-2': 21,
 }
+
+STANDARD_LEVEL_DEFINITIONS = {
+    'Level 1': 'Hay 8-9 | 入门岗位',
+    'Level 2': 'Hay 10-11 | 助理/初级专业人员',
+    'Level 3': 'Hay 12-13 | 中级专业人员 / 专员',
+    'Level 4': 'Hay 14-15 | 高级专业人员 / 主管',
+    'Level 5': 'Hay 16-17 | 资深专业人员 / 经理',
+    'Level 6': 'Hay 18-19 | 专家 / 高级经理',
+    'Level 7': 'Hay 20-21 | 总监',
+}
+
+# 向后兼容的别名（旧代码可能引用）
+STANDARD_GRADES = STANDARD_LEVELS
+STANDARD_GRADE_DEFINITIONS = STANDARD_LEVEL_DEFINITIONS
 
 # 管理关键词
 _MGMT_KEYWORDS = ['主管', '经理', '总监', '负责人', '部长', '院长',
@@ -106,22 +133,22 @@ def _detect_signals(emp: dict) -> list:
 
 def ai_match_grades(grades_list: list) -> dict:
     """
-    AI #1：公司职级 → 标准职级映射。
-    输入很短（几个职级名），输出也短。
-    返回 { 'L3': '初级专业人员', 'L4': '中级专业人员', ... }
+    AI #1：公司职级 → 标准职级映射（Level 1 - Level 7）。
+    返回 { 'L3': 'Level 2', 'L4': 'Level 3', ... }
     """
     from app.agents.base_agent import BaseAgent
     agent = BaseAgent(temperature=0.2)
 
+    level_desc = '\n'.join(f'{k}: {v}' for k, v in STANDARD_LEVEL_DEFINITIONS.items())
     prompt = f"""请将以下公司职级映射到铭曦标准职级体系。
 
 公司职级列表：{json.dumps(grades_list, ensure_ascii=False)}
 
 标准职级体系（从低到高）：
-{json.dumps(STANDARD_GRADES, ensure_ascii=False)}
+{level_desc}
 
-输出严格 JSON，格式：{{"L3": "初级专业人员", "L4": "中级专业人员", ...}}
-只输出 JSON，不要其他文字。"""
+输出严格 JSON，格式：{{"L3": "Level 2", "L4": "Level 3", ...}}
+值必须是 Level 1 到 Level 7 之一。只输出 JSON，不要其他文字。"""
 
     messages = [
         {"role": "system", "content": "你是薪酬诊断系统的职级匹配模块。根据公司职级名称，推断其对应的标准职级。"},
@@ -136,10 +163,10 @@ def ai_match_grades(grades_list: list) -> dict:
 
     try:
         mapping = json.loads(response.strip())
-        # 确保所有值都在标准职级列表中
+        # 确保所有值都在 Level 1-7
         for k, v in list(mapping.items()):
-            if v not in STANDARD_GRADES:
-                mapping[k] = _closest_standard_grade(v)
+            if v not in STANDARD_LEVELS:
+                mapping[k] = _closest_standard_level(v)
         return mapping
     except json.JSONDecodeError:
         return {}
@@ -169,21 +196,26 @@ def ai_suggest_adjustments(employees_with_signals: list, grade_mapping: dict) ->
             'signals': [s['reason'] for s in e['signals']],
         })
 
-    prompt = f"""以下员工有调整信号，请判断是否建议调整对标级别。
+    level_desc = '\n'.join(f'{k}: {v}' for k, v in STANDARD_LEVEL_DEFINITIONS.items())
+    prompt = f"""以下员工有调整信号，请判断是否建议调整对标子级别。
 
 员工列表：
 {json.dumps(emp_summaries, ensure_ascii=False, indent=2)}
 
-标准职级体系（从低到高）：
-{json.dumps(STANDARD_GRADES, ensure_ascii=False)}
+标准职级体系：
+{level_desc}
+
+子级别列表（用于精细调整）：
+{json.dumps(STANDARD_SUB_LEVELS, ensure_ascii=False)}
 
 规则：
-- 绩效A 的员工，建议上调一级
-- 绩效C 的员工，建议下调一级
-- 岗位含管理关键词但级别偏低的，建议上调一级
+- 绩效A 的员工，建议上调到当前大级的 -2 子级或上一大级的 -1 子级
+- 绩效C 的员工，建议下调到当前大级的 -1 子级或下一大级的 -2 子级
+- 岗位含管理关键词但级别偏低的，建议上调一个子级
+- suggested_grade 必须是子级别格式（如 Level 4-2, Level 5-1）
 - 如果不建议调整，不要输出该员工
 
-输出严格 JSON 数组：[{{"id": "EMP001", "suggested_grade": "专家/经理", "reason": "绩效A，建议上调"}}]
+输出严格 JSON 数组：[{{"id": "EMP001", "suggested_grade": "Level 5-1", "reason": "绩效A，建议上调"}}]
 只输出 JSON，不要其他文字。"""
 
     messages = [
@@ -204,25 +236,26 @@ def ai_suggest_adjustments(employees_with_signals: list, grade_mapping: dict) ->
         return []
 
 
-def _closest_standard_grade(name: str) -> str:
-    """模糊匹配最接近的标准职级"""
-    name_lower = name.lower()
-    for sg in STANDARD_GRADES:
-        if sg in name_lower or name_lower in sg:
-            return sg
+def _closest_standard_level(name: str) -> str:
+    """模糊匹配最接近的标准 Level"""
+    n = name.lower().strip()
+    # 直接包含 Level N
+    for lv in STANDARD_LEVELS:
+        if lv.lower() in n:
+            return lv
     # 关键词匹配
-    if any(k in name_lower for k in ['初级', '助理', 'junior']):
-        return '初级专业人员'
-    if any(k in name_lower for k in ['中级']):
-        return '中级专业人员'
-    if any(k in name_lower for k in ['高级', 'senior']):
-        return '高级专业人员'
-    if any(k in name_lower for k in ['专家', '经理']):
-        return '专家/经理'
-    if any(k in name_lower for k in ['资深', '高级经理']):
-        return '资深专家/高级经理'
-    if any(k in name_lower for k in ['总监', 'director']):
-        return '总监'
-    if any(k in name_lower for k in ['高管', 'vp', 'ceo', 'cfo', 'cto']):
-        return '高管'
-    return '中级专业人员'  # 默认
+    if any(k in n for k in ['入门', '实习']):
+        return 'Level 1'
+    if any(k in n for k in ['初级', '助理', 'junior']):
+        return 'Level 2'
+    if any(k in n for k in ['中级', '专员']):
+        return 'Level 3'
+    if any(k in n for k in ['高级', 'senior', '主管']):
+        return 'Level 4'
+    if any(k in n for k in ['资深', '经理', 'manager']):
+        return 'Level 5'
+    if any(k in n for k in ['专家', '高级经理']):
+        return 'Level 6'
+    if any(k in n for k in ['总监', 'director', '高管', 'vp']):
+        return 'Level 7'
+    return 'Level 3'  # 默认中级

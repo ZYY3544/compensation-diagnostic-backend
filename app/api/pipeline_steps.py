@@ -252,6 +252,7 @@ def run_grade_match(session_id):
 
     from app.services.grade_matcher import (
         STANDARD_GRADES, STANDARD_GRADE_DEFINITIONS,
+        STANDARD_SUB_LEVELS, HAY_GRADE_MAP,
         build_grade_match_data, ai_match_grades, ai_suggest_adjustments,
     )
     grades_list = session.get('_grades_list', [])
@@ -271,7 +272,7 @@ def run_grade_match(session_id):
     # 没映射到的用默认值
     for g in grades_list:
         if g not in grade_mapping:
-            grade_mapping[g] = '中级专业人员'
+            grade_mapping[g] = 'Level 3'
 
     # Step 3: AI #2 — 调整建议（只传有信号的人）
     suggestions = []
@@ -349,6 +350,8 @@ def run_grade_match(session_id):
         'employees_by_grade': employees_by_grade,
         'standard_grades': STANDARD_GRADES,
         'standard_grade_definitions': STANDARD_GRADE_DEFINITIONS,
+        'standard_sub_levels': STANDARD_SUB_LEVELS,
+        'hay_grade_map': HAY_GRADE_MAP,
         'sparky_message': sparky_message,
     }
 
