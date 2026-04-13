@@ -29,31 +29,69 @@ def run_cleansing(session_id):
     if not code_results:
         return jsonify({'cleansing_corrections': base_corrections})
 
-    try:
-        import os
-        if not os.getenv('OPENROUTER_API_KEY', '').strip():
-            raise RuntimeError('No API key')
+    import os
+    if not os.getenv('OPENROUTER_API_KEY', '').strip():
+        session['_ai_cleansing_done'] = True
+        session['_merged_corrections'] = base_corrections
+        return jsonify({'cleansing_corrections': base_corrections})
 
+    try:
+        # Step 1: CleansingAgent 做专业判断（年化/异常值/绩效映射等）
         from app.agents.cleansing_agent import CleansingAgent
-        from app.services.pipeline import _merge_ai_corrections
         agent = CleansingAgent()
-        ai_results = agent.run(code_results)
-        if ai_results and not ai_results.get('error'):
-            merged = _merge_ai_corrections(base_corrections, ai_results, code_results)
-        else:
-            merged = base_corrections
+        ai_judgments = agent.run(code_results)
+
+        # Step 2: 让 AI 直接输出用户看到的修正项文案
+        from app.agents.base_agent import BaseAgent
+        writer = BaseAgent(temperature=0.3)
+        import json
+        prompt_data = {
+            'code_detections': {
+                k: v for k, v in code_results.items()
+                if k not in ('sample_rows',) and v  # 过滤空值和大数据
+            },
+            'ai_judgments': ai_judgments if not ai_judgments.get('error') else None,
+        }
+        messages = [
+            {"role": "system", "content": (
+                "你是薪酬诊断系统的数据清洗模块。根据下面的代码检测结果和 AI 判断结果，"
+                "生成面向用户的修正项列表。每一项用一句简洁的中文描述发生了什么以及做了什么处理。\n\n"
+                "输出 JSON 数组，每项格式：\n"
+                '[{"id": 1, "description": "一句话描述", "type": "类型标签"}]\n\n'
+                "规则：\n"
+                "- description 必须具体：提到涉及的行号、数值、字段名\n"
+                "- 合并同类项：同一类问题合成一条，不要逐行列出\n"
+                "- 如果 AI 判断推翻了代码检测（如判断不是异常值），则不要输出该项\n"
+                "- 如果没有任何需要修正的问题，返回空数组 []\n"
+                "- type 可选：annualize_bonus, extreme_value, 13th_month_reclassify, "
+                "salary_inversion, performance_mapping, department_merge, lti_suspect, "
+                "allowance_high, date_anomaly\n"
+                "- 只输出 JSON，不要其他文字"
+            )},
+            {"role": "user", "content": json.dumps(prompt_data, ensure_ascii=False, indent=2)},
+        ]
+        response = writer.call_llm(messages)
+
+        # 解析 JSON
+        if '```json' in response:
+            response = response.split('```json')[1].split('```')[0]
+        elif '```' in response:
+            response = response.split('```')[1].split('```')[0]
+        corrections = json.loads(response.strip())
+        if not isinstance(corrections, list):
+            corrections = base_corrections
     except Exception as e:
         print(f'[Pipeline] AI cleansing failed: {e}')
-        merged = base_corrections
+        import traceback
+        traceback.print_exc()
+        corrections = base_corrections
 
-    session['_merged_corrections'] = merged
+    session['_merged_corrections'] = corrections
     session['_ai_cleansing_done'] = True
-
-    # 同步更新 parse_result
     if session.get('parse_result'):
-        session['parse_result']['cleansing_corrections'] = merged
+        session['parse_result']['cleansing_corrections'] = corrections
 
-    return jsonify({'cleansing_corrections': merged})
+    return jsonify({'cleansing_corrections': corrections})
 
 
 @pipeline_bp.route('/<session_id>/grade-match', methods=['POST'])
