@@ -76,9 +76,4 @@ class CleansingAgent(BaseAgent):
             problems['department_names'] = departments
             problems['has_problems'] = True
 
-        # 规则14: 高年终奖疑似长期激励
-        if code_results.get('high_bonus_suspects'):
-            problems['high_bonus_suspects'] = code_results['high_bonus_suspects']
-            problems['has_problems'] = True
-
         return problems

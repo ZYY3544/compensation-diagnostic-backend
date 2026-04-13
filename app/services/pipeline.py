@@ -48,6 +48,7 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
         tcc = base_annual + fixed_bonus + variable_bonus + cash_allowance
         base_monthly = base_annual / 12 if base_annual else 0
         emp = {
+            'row_number': row['row_number'],
             'id': _get_mapped(d, field_map, 'employee_id') or f'ROW{row["row_number"]}',
             'job_title': _get_mapped(d, field_map, 'job_title') or '',
             'grade': str(grade) if grade else '',
@@ -119,6 +120,7 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
 
     # 把中间状态存到 session，供后续 LLM 步骤使用
     session['_code_results'] = code_results
+    session['_column_names'] = columns
     session['_grades_list'] = grades_list
     session['_field_map'] = field_map
     session['_employees'] = employees
