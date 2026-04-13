@@ -65,6 +65,9 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
             'hire_date': str(_get_mapped(d, field_map, 'hire_date') or ''),
             'manager': _get_mapped(d, field_map, 'manager') or '',
             'city': _get_mapped(d, field_map, 'city') or '',
+            'job_family': _get_mapped(d, field_map, 'job_family') or '',
+            'job_class': _get_mapped(d, field_map, 'job_class') or '',
+            'department_2': _get_mapped(d, field_map, 'department_2') or '',
         }
         employees.append(emp)
 
@@ -186,6 +189,9 @@ def _detect_fields(columns: list) -> dict:
         'city': ['城市', 'base'],
         'age': ['年龄'],
         'education': ['学历', '教育'],
+        'job_family': ['职位族', '岗位族', '职能族'],
+        'job_class': ['职位类', '岗位类', '职能类'],
+        'department_2': ['部门（二级）', '二级部门', '二级'],
     }
     for col in columns:
         col_lower = col.lower() if col else ''

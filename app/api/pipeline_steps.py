@@ -380,21 +380,150 @@ def run_func_match(session_id):
     if not session:
         return jsonify({'error': 'Session not found'}), 404
     if session.get('_func_match_done'):
-        return jsonify({'function_matching': session.get('function_matching', [])})
+        return jsonify(session.get('_func_match_result', {}))
 
-    from app.services.pipeline import _run_function_matching, _fallback_function_matching_from_employees
+    from app.services.func_matcher import (
+        STANDARD_FAMILIES, FAMILY_LIST, FAMILY_DEFINITIONS,
+        SUBFUNCTION_DEFINITIONS, build_func_match_data,
+        ai_match_families, ai_match_subfunctions,
+    )
     employees = session.get('_employees', [])
+    field_map = session.get('_field_map', {})
 
-    if not _has_api_key():
-        function_matching = _fallback_function_matching_from_employees(employees)
-    else:
-        function_matching = _run_function_matching(employees)
+    # Step 1: 代码判断数据源 + 分组统计
+    data = build_func_match_data(employees, field_map)
+    source_names = [s['source_name'] for s in data['source_stats']]
 
-    session['function_matching'] = function_matching
+    # Step 2: AI #1 — 来源分类 → 标准职位族
+    family_mapping = {}
+    if _has_api_key() and source_names:
+        try:
+            family_mapping = ai_match_families(source_names)
+        except Exception as e:
+            print(f'[FuncMatch] AI family mapping failed: {e}')
+    for name in source_names:
+        if name not in family_mapping:
+            family_mapping[name] = '其他'
+
+    # Step 3: AI #2 — 每个职位族内的职位类映射 + 岗位异常
+    sub_mappings = {}
+    all_mismatches = []
+    for source_name, family in family_mapping.items():
+        sub_group = data['sub_groups'].get(source_name, {})
+        sub_names = list(sub_group.keys())
+        # 收集该族下的岗位名称（去重，最多20个）
+        titles = list(set(
+            emp.get('job_title', '') for emps in sub_group.values() for emp in emps
+            if emp.get('job_title')
+        ))[:20]
+
+        if _has_api_key() and (sub_names or titles):
+            try:
+                result = ai_match_subfunctions(family, sub_names, titles)
+                sub_mappings[source_name] = result.get('sub_mapping', {})
+                for mm in result.get('mismatches', []):
+                    mm['source_family'] = source_name
+                    all_mismatches.append(mm)
+            except Exception as e:
+                print(f'[FuncMatch] AI sub-match failed for {source_name}: {e}')
+                sub_mappings[source_name] = {}
+        else:
+            sub_mappings[source_name] = {}
+
+    # 组装返回结构
+    family_table = []
+    for s in data['source_stats']:
+        family_table.append({
+            'source_name': s['source_name'],
+            'count': s['count'],
+            'standard_family': family_mapping.get(s['source_name'], '其他'),
+            'status': 'matched',
+        })
+
+    sub_details = {}
+    for source_name in [s['source_name'] for s in data['source_stats']]:
+        sub_group = data['sub_groups'].get(source_name, {})
+        sm = sub_mappings.get(source_name, {})
+        family = family_mapping.get(source_name, '其他')
+        available_subs = STANDARD_FAMILIES.get(family, ['未分类'])
+
+        sub_rows = []
+        for sub_name, emps in sub_group.items():
+            emp_list = []
+            for emp in emps:
+                is_mismatch = any(
+                    mm.get('title') == emp.get('job_title') and mm.get('source_family') == source_name
+                    for mm in all_mismatches
+                )
+                mismatch_info = next(
+                    (mm for mm in all_mismatches
+                     if mm.get('title') == emp.get('job_title') and mm.get('source_family') == source_name),
+                    None
+                )
+                emp_list.append({
+                    'row_number': emp.get('row_number'),
+                    'id': emp.get('id', ''),
+                    'job_title': emp.get('job_title', ''),
+                    'current_subfunction': sm.get(sub_name, available_subs[0] if available_subs else '未分类'),
+                    'is_mismatch': is_mismatch,
+                    'suggested_family': mismatch_info.get('suggested_family') if mismatch_info else None,
+                    'mismatch_reason': mismatch_info.get('reason') if mismatch_info else None,
+                })
+
+            mismatch_count = sum(1 for e in emp_list if e['is_mismatch'])
+            sub_rows.append({
+                'sub_source_name': sub_name,
+                'count': len(emp_list),
+                'standard_subfunction': sm.get(sub_name, available_subs[0] if available_subs else '未分类'),
+                'available_subfunctions': available_subs,
+                'mismatch_count': mismatch_count,
+                'employees': emp_list,
+            })
+
+        total_mismatches = sum(r['mismatch_count'] for r in sub_rows)
+        sub_details[source_name] = {
+            'family': family,
+            'sub_rows': sub_rows,
+            'total': sum(r['count'] for r in sub_rows),
+            'mismatch_count': total_mismatches,
+        }
+
+    # Sparky 消息
+    total_families = len(family_table)
+    total_mismatches = len(all_mismatches)
+    sparky_message = f"职能匹配完成，{total_families} 个分类已映射到标准职位族。"
+    if total_mismatches > 0:
+        sparky_message += f"有 {total_mismatches} 个岗位的归属不太确定，需要你确认一下。"
+
+    if _has_api_key():
+        try:
+            from app.agents.base_agent import BaseAgent
+            agent = BaseAgent(temperature=0.5)
+            messages = [
+                {"role": "system", "content": (
+                    "你是 Sparky，铭曦产品的 AI 薪酬诊断助手。"
+                    "系统刚完成了职能匹配。用 2-3 句自然口语告诉用户为什么要做这一步、匹配情况如何。"
+                    "语气轻松专业，不要用 markdown。"
+                )},
+                {"role": "user", "content": sparky_message},
+            ]
+            sparky_message = agent.call_llm(messages).strip() or sparky_message
+        except:
+            pass
+
+    result = {
+        'family_table': family_table,
+        'sub_details': sub_details,
+        'standard_families': STANDARD_FAMILIES,
+        'family_definitions': FAMILY_DEFINITIONS,
+        'subfunction_definitions': SUBFUNCTION_DEFINITIONS,
+        'data_source': data['data_source'],
+        'sparky_message': sparky_message,
+    }
+
+    session['_func_match_result'] = result
     session['_func_match_done'] = True
-    if session.get('parse_result'):
-        session['parse_result']['function_matching'] = function_matching
-    return jsonify({'function_matching': function_matching})
+    return jsonify(result)
 
 
 # ======================================================================
