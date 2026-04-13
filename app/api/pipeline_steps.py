@@ -183,8 +183,9 @@ def _mutations_to_corrections(mutations: list) -> list:
     return [
         {
             'id': m['id'],
-            'description': m.get('description', ''),
+            'description': m.get('description', '') or m.get('context', ''),
             'type': m.get('type', ''),
+            'context': m.get('context', ''),
             'row_number': m.get('row_number'),
             'field': m.get('field'),
             'old_value': m.get('old_value'),
