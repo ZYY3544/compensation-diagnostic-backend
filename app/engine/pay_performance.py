@@ -1,36 +1,78 @@
+"""
+模块四：绩效关联分析
+- 不同绩效等级的平均薪酬和 CR
+- 绩效等级间的薪酬差异倍数
+- 高绩效 vs 低绩效的薪酬拉开程度
+"""
+from collections import defaultdict
+from app.engine.common import safe_mean
+
+
+PERF_ORDER = ['A', 'B+', 'B', 'B-', 'C']
+
+
 def analyze(employees):
-    """
-    薪酬绩效相关性分析
-    - 按绩效等级计算平均 CR
-    - 按绩效等级计算调薪幅度（如有多年数据）
-    """
-    from collections import defaultdict
-
-    results = {
-        'cr_by_performance': [],
-        'raise_by_performance': []
-    }
-
-    perf_crs = defaultdict(list)
+    # 按绩效分组
+    perf_groups = defaultdict(list)
     for emp in employees:
-        if emp.get('performance') and emp.get('cr'):
-            perf_crs[emp['performance']].append(emp['cr'])
+        perf = str(emp.get('performance', '')).strip()
+        if perf and emp.get('base_monthly') and emp['base_monthly'] > 0:
+            perf_groups[perf].append(emp)
 
-    perf_order = ['A', 'B+', 'B', 'B-', 'C']
-    for p in perf_order:
-        crs = perf_crs.get(p, [])
-        if crs:
-            results['cr_by_performance'].append({
-                'grade': p, 'cr': round(sum(crs) / len(crs), 2)
-            })
+    # 按绩效等级计算平均薪酬和 CR
+    perf_stats = []
+    perf_avg_salary = {}
+    for p in PERF_ORDER:
+        emps = perf_groups.get(p, [])
+        if not emps:
+            continue
+        salaries = [e['base_monthly'] for e in emps]
+        crs = [e['cr'] for e in emps if e.get('cr') is not None]
+        avg_salary = round(safe_mean(salaries))
+        avg_cr = round(safe_mean(crs), 2) if crs else None
+        perf_avg_salary[p] = avg_salary
+        perf_stats.append({
+            'grade': p,
+            'count': len(emps),
+            'avg_salary': avg_salary,
+            'avg_cr': avg_cr,
+        })
 
-    # Mock raise data for now (needs multi-year data)
-    results['raise_by_performance'] = [
-        {'grade': 'A', 'pct': 12},
-        {'grade': 'B+', 'pct': 8},
-        {'grade': 'B', 'pct': 6},
-        {'grade': 'B-', 'pct': 3},
-        {'grade': 'C', 'pct': 1},
-    ]
+    # 薪酬差异倍数：A vs C
+    a_avg = perf_avg_salary.get('A', 0)
+    c_avg = perf_avg_salary.get('C', 0)
+    a_vs_c_ratio = round(a_avg / c_avg, 2) if c_avg > 0 else None
 
-    return results
+    # 高绩效(A) vs 平均绩效(B) 的差距
+    b_avg = perf_avg_salary.get('B', 0)
+    a_vs_b_gap_pct = round((a_avg / b_avg - 1) * 100, 1) if b_avg > 0 else None
+
+    # 各绩效等级的 TCC 对比（用于柱状图）
+    tcc_by_perf = []
+    for p in PERF_ORDER:
+        emps = perf_groups.get(p, [])
+        if not emps:
+            continue
+        tccs = [e.get('tcc', 0) or (e.get('base_monthly', 0) * 12 + (e.get('variable_bonus', 0) or 0)) for e in emps]
+        tcc_by_perf.append({
+            'grade': p,
+            'avg_tcc': round(safe_mean(tccs)),
+            'count': len(emps),
+        })
+
+    # 判断是否"撒胡椒面"（高低绩效差距不够大）
+    spread_adequate = True
+    if a_vs_b_gap_pct is not None and a_vs_b_gap_pct < 10:
+        spread_adequate = False
+
+    has_perf_data = len(perf_stats) >= 2
+
+    return {
+        'perf_stats': perf_stats,
+        'tcc_by_perf': tcc_by_perf,
+        'a_vs_c_ratio': a_vs_c_ratio,
+        'a_vs_b_gap_pct': a_vs_b_gap_pct,
+        'spread_adequate': spread_adequate,
+        'has_data': has_perf_data,
+        'status': 'attention' if not spread_adequate else ('normal' if has_perf_data else 'unavailable'),
+    }

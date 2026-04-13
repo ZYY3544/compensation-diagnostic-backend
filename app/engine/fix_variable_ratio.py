@@ -1,41 +1,87 @@
+"""
+模块三：薪酬结构（Pay Mix）分析
+- 各部门/层级的固浮比
+- 堆叠柱状图数据
+"""
+from collections import defaultdict
+from app.engine.common import safe_mean
+
+
 def analyze(employees):
-    """
-    薪酬固浮比分析
-    - 按职级计算固定/浮动薪酬比例
-    """
-    from collections import defaultdict
+    # 按职级分组
+    grade_data = defaultdict(lambda: {'fixed': [], 'variable': [], 'tcc': []})
+    dept_data = defaultdict(lambda: {'fixed': [], 'variable': [], 'tcc': []})
 
-    results = {'pay_mix': [], 'comparison': []}
-
-    grade_data = defaultdict(lambda: {'fixed': [], 'variable': []})
     for emp in employees:
-        if emp.get('grade') and emp.get('base_monthly') and emp.get('annual_bonus') is not None:
-            annual_fixed = emp['base_monthly'] * 12
-            variable = emp.get('annual_bonus', 0)
-            grade_data[emp['grade']]['fixed'].append(annual_fixed)
-            grade_data[emp['grade']]['variable'].append(variable)
+        base = emp.get('base_monthly', 0) or 0
+        fixed_bonus = emp.get('fixed_bonus', 0) or 0
+        variable = emp.get('variable_bonus', 0) or 0
+        annual_fixed = base * 12 + fixed_bonus
+        tcc = annual_fixed + variable
 
-    market_ref = {'Level2': 80, 'Level3': 80, 'Level4': 75, 'Level5': 70, 'Level6': 65, 'Level7': 60}
+        grade = emp.get('grade', '')
+        dept = emp.get('department', '')
 
+        if grade and base > 0:
+            grade_data[grade]['fixed'].append(annual_fixed)
+            grade_data[grade]['variable'].append(variable)
+            grade_data[grade]['tcc'].append(tcc)
+
+        if dept and base > 0:
+            dept_data[dept]['fixed'].append(annual_fixed)
+            dept_data[dept]['variable'].append(variable)
+            dept_data[dept]['tcc'].append(tcc)
+
+    # 按职级的固浮比
+    pay_mix_by_grade = []
     for grade in sorted(grade_data.keys()):
         d = grade_data[grade]
-        avg_fixed = int(sum(d['fixed']) / len(d['fixed']))
-        avg_var = int(sum(d['variable']) / len(d['variable']))
+        avg_fixed = round(safe_mean(d['fixed']))
+        avg_var = round(safe_mean(d['variable']))
         total = avg_fixed + avg_var
-        fix_ratio = round(avg_fixed / total * 100) if total > 0 else 0
-
-        results['pay_mix'].append({
-            'grade': grade, 'fixed': avg_fixed, 'variable': avg_var
+        fix_pct = round(avg_fixed / total * 100) if total > 0 else 0
+        var_pct = 100 - fix_pct
+        pay_mix_by_grade.append({
+            'grade': grade,
+            'fixed': avg_fixed,
+            'variable': avg_var,
+            'total': total,
+            'fix_pct': fix_pct,
+            'var_pct': var_pct,
+            'count': len(d['fixed']),
         })
 
-        # Extract level number for market reference
-        level_key = grade.split('-')[0] if '-' in grade else grade
-        market_fix = market_ref.get(level_key, 75)
-
-        diff = '接近' if abs(fix_ratio - market_fix) <= 5 else ('固定偏高' if fix_ratio > market_fix else '固定偏低')
-        results['comparison'].append({
-            'grade': grade, 'company': f'{fix_ratio}:{100 - fix_ratio}',
-            'market': f'{market_fix}:{100 - market_fix}', 'diff': diff
+    # 按部门的固浮比
+    pay_mix_by_dept = []
+    for dept in sorted(dept_data.keys()):
+        d = dept_data[dept]
+        avg_fixed = round(safe_mean(d['fixed']))
+        avg_var = round(safe_mean(d['variable']))
+        total = avg_fixed + avg_var
+        fix_pct = round(avg_fixed / total * 100) if total > 0 else 0
+        var_pct = 100 - fix_pct
+        pay_mix_by_dept.append({
+            'department': dept,
+            'fixed': avg_fixed,
+            'variable': avg_var,
+            'total': total,
+            'fix_pct': fix_pct,
+            'var_pct': var_pct,
+            'count': len(d['fixed']),
         })
 
-    return results
+    # 整体固浮比
+    all_fixed = [e.get('base_monthly', 0) * 12 + (e.get('fixed_bonus', 0) or 0) for e in employees if e.get('base_monthly')]
+    all_var = [e.get('variable_bonus', 0) or 0 for e in employees if e.get('base_monthly')]
+    total_fixed = sum(all_fixed)
+    total_var = sum(all_var)
+    total_all = total_fixed + total_var
+    overall_fix_pct = round(total_fixed / total_all * 100) if total_all > 0 else 0
+
+    return {
+        'pay_mix_by_grade': pay_mix_by_grade,
+        'pay_mix_by_dept': pay_mix_by_dept,
+        'overall_fix_pct': overall_fix_pct,
+        'overall_var_pct': 100 - overall_fix_pct,
+        'status': 'normal',
+    }

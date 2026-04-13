@@ -1,3 +1,9 @@
+"""
+诊断报告编排：
+1. 跑 5 个分析引擎（纯代码计算）
+2. 生成结构化结果供前端图表使用
+3. AI 生成诊断摘要、模块解读、行动建议（Phase 3）
+"""
 from flask import Blueprint, jsonify
 from app.services.market_data import lookup_market_salary
 
@@ -6,13 +12,10 @@ report_bp = Blueprint('report', __name__)
 
 @report_bp.route('/<session_id>', methods=['GET'])
 def get_report(session_id):
-    """Get the diagnostic report for a session"""
     from app.api.sessions import sessions_store
-
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
-
     report = session.get('analysis_results')
     if not report:
         return jsonify({'error': 'Analysis not complete'}), 400
@@ -21,140 +24,157 @@ def get_report(session_id):
 
 @report_bp.route('/<session_id>/analyze', methods=['POST'])
 def run_analysis(session_id):
-    """Trigger analysis pipeline"""
     from app.api.sessions import sessions_store
-
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
 
     session['status'] = 'analyzing'
 
-    # Get cleaned employee data (for MVP, use mock data if real data not available)
-    employees = session.get('cleaned_employees', get_mock_employees())
-    company_data = session.get('company_data')
+    employees = session.get('cleaned_employees') or session.get('_employees', [])
+    if not employees:
+        return jsonify({'error': 'No employee data'}), 400
 
-    # Run all analysis modules
-    from app.engine import external_competitiveness, internal_equity, pay_performance, fix_variable_ratio, labor_cost
+    sheet2_summary = None
+    if session.get('parse_result'):
+        sheet2_summary = session['parse_result'].get('sheet2_summary')
+
+    # ==============================
+    # Phase 1: 跑 5 个计算引擎
+    # ==============================
+    from app.engine import (
+        external_competitiveness, internal_equity,
+        pay_performance, fix_variable_ratio, labor_cost,
+    )
 
     ext_comp = external_competitiveness.analyze(employees, lookup_market_salary)
     int_equity = internal_equity.analyze(employees)
     pay_perf = pay_performance.analyze(employees)
     fix_var = fix_variable_ratio.analyze(employees)
-    lab_cost = labor_cost.analyze(employees, company_data)
+    lab_cost = labor_cost.analyze(employees, sheet2_summary=sheet2_summary)
 
-    # Calculate health score
-    cr_values = [e.get('cr', 1.0) for e in employees if e.get('cr')]
-    avg_cr = sum(cr_values) / len(cr_values) if cr_values else 1.0
-    health_score = min(100, max(0, int(avg_cr * 70 + 30)))  # Simple formula
+    # ==============================
+    # 健康分（基于各模块 status 综合打分）
+    # ==============================
+    health_score = _calculate_health_score(ext_comp, int_equity, pay_perf, fix_var, lab_cost)
 
-    # Remap engine output keys to match frontend expectations
-    ext_comp_mapped = {
-        **ext_comp,
-        'heatmap': ext_comp.get('cr_heatmap'),  # frontend reads 'heatmap'
-        'status': 'warning' if avg_cr < 0.95 else 'normal',
-    }
-    int_equity_mapped = {
-        **int_equity,
-        'deviation': int_equity.get('deviation_matrix', {}).get('values', []),
-        'deviation_levels': int_equity.get('deviation_matrix', {}).get('grades', []),
-        'deviation_departments': int_equity.get('deviation_matrix', {}).get('departments', []),
-        'status': 'attention',
-    }
-    fix_var_mapped = {
-        **fix_var,
-        'ratio_by_grade': fix_var.get('pay_mix'),  # frontend reads 'ratio_by_grade'
-        'status': 'normal',
-    }
-    lab_cost_mapped = {
-        **lab_cost,
-        'metrics': lab_cost.get('kpi'),  # frontend reads 'metrics'
-        'cost_trend': lab_cost.get('trend'),  # frontend reads 'cost_trend'
-        'status': 'warning' if company_data else 'unavailable',
-    }
+    # ==============================
+    # 关键发现（代码逻辑提取，Phase 3 会加 AI 交叉验证）
+    # ==============================
+    key_findings = _generate_key_findings(ext_comp, int_equity, pay_perf, fix_var, lab_cost)
 
     report = {
         'health_score': health_score,
-        'key_findings': generate_key_findings(ext_comp, int_equity, pay_perf, lab_cost),
+        'key_findings': key_findings,
         'modules': {
-            'external_competitiveness': ext_comp_mapped,
-            'internal_equity': int_equity_mapped,
-            'pay_performance': {**pay_perf, 'status': 'attention'},
-            'fix_variable_ratio': fix_var_mapped,
-            'labor_cost': lab_cost_mapped,
-        }
+            'external_competitiveness': ext_comp,
+            'internal_equity': int_equity,
+            'pay_performance': pay_perf,
+            'fix_variable_ratio': fix_var,
+            'labor_cost': lab_cost,
+        },
     }
 
     session['status'] = 'report_done'
     session['analysis_results'] = report
 
-    return jsonify({'status': 'analyzing'}), 202
+    return jsonify(report), 200
 
 
-def generate_key_findings(ext_comp, int_equity, pay_perf, lab_cost):
+def _calculate_health_score(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
+    """综合健康分（0-100），基于各模块的核心指标"""
+    scores = []
+
+    # 外部竞争力：CR 越接近 1.0 越好
+    cr = ext_comp.get('overall_cr')
+    if cr:
+        # CR=1.0 → 100分，CR=0.8 → 60分，CR=1.2 → 80分
+        cr_score = max(0, min(100, 100 - abs(cr - 1.0) * 200))
+        scores.append(cr_score * 0.3)  # 权重 30%
+
+    # 内部公平性：离散度异常越少越好
+    high_disp = int_equity.get('high_dispersion_count', 0)
+    total_grades = len(int_equity.get('dispersion', []))
+    if total_grades > 0:
+        equity_score = max(0, 100 - high_disp / total_grades * 100)
+        scores.append(equity_score * 0.25)  # 权重 25%
+
+    # 绩效关联：A vs B 差距够大
+    gap = pay_perf.get('a_vs_b_gap_pct')
+    if gap is not None:
+        # 差距 15%+ → 100分，差距 0% → 40分
+        perf_score = min(100, 40 + gap * 4)
+        scores.append(perf_score * 0.2)  # 权重 20%
+
+    # 薪酬结构：固浮比合理
+    fix_pct = fix_var.get('overall_fix_pct', 70)
+    # 60-80% 固定占比最佳
+    if 60 <= fix_pct <= 80:
+        mix_score = 100
+    else:
+        mix_score = max(0, 100 - abs(fix_pct - 70) * 2)
+    scores.append(mix_score * 0.15)  # 权重 15%
+
+    # 人工成本：有数据就给基础分
+    if lab_cost.get('has_trend_data'):
+        scores.append(70 * 0.1)  # 权重 10%
+    else:
+        scores.append(50 * 0.1)
+
+    total_weight = sum([0.3, 0.25, 0.2, 0.15, 0.1][:len(scores)])
+    return round(sum(scores) / total_weight) if total_weight > 0 else 50
+
+
+def _generate_key_findings(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
+    """生成 3-5 条关键发现，按优先级排序"""
     findings = []
 
-    # Check CR by function
+    # 外部竞争力
+    overall_cr = ext_comp.get('overall_cr')
+    if overall_cr and overall_cr < 0.9:
+        findings.append({
+            'priority': 'P1', 'severity': 'red',
+            'module': 'external_competitiveness',
+            'text': f'整体薪酬竞争力不足（CR {overall_cr}），{ext_comp.get("total_below_p25", 0)} 人低于市场 P25',
+        })
+
     for f in ext_comp.get('cr_by_function', []):
-        if f['cr'] < 0.85:
-            findings.append({'severity': 'red', 'text': f"{f['name']}薪酬竞争力不足，CR 仅 {f['cr']}"})
+        if f.get('cr', 1) < 0.85 and f.get('below_p25_count', 0) > 0:
+            findings.append({
+                'priority': 'P1', 'severity': 'red',
+                'module': 'external_competitiveness',
+                'text': f'{f["name"]}薪酬严重偏低（CR {f["cr"]}），{f["below_p25_count"]} 人低于 P25',
+            })
 
-    # Check dispersion
-    for d in int_equity.get('dispersion', []):
-        if d['status'] == 'high':
-            findings.append({'severity': 'amber', 'text': f"{d['grade']} 层级内部薪酬离散度偏高，离散系数 {d['coefficient']}"})
+    # 内部公平性
+    if int_equity.get('high_dispersion_count', 0) > 0:
+        high_grades = [d['grade'] for d in int_equity.get('dispersion', []) if d['status'] == 'high']
+        findings.append({
+            'priority': 'P2', 'severity': 'amber',
+            'module': 'internal_equity',
+            'text': f'{", ".join(high_grades[:3])} 层级内部薪酬离散度偏高，存在同岗不同酬风险',
+        })
 
-    # Check pay-performance
-    cr_by_perf = pay_perf.get('cr_by_performance', [])
-    if len(cr_by_perf) >= 2:
-        top_cr = cr_by_perf[0].get('cr', 1.0)
-        bottom_cr = cr_by_perf[-1].get('cr', 1.0)
-        if bottom_cr > 0:
-            gap = round((top_cr / bottom_cr - 1) * 100)
-            if gap < 30:
-                findings.append({'severity': 'amber', 'text': f'绩效与薪酬关联偏弱，最高与最低绩效薪酬差距仅 {gap}%'})
+    # 绩效关联
+    if pay_perf.get('has_data') and not pay_perf.get('spread_adequate'):
+        findings.append({
+            'priority': 'P2', 'severity': 'amber',
+            'module': 'pay_performance',
+            'text': f'高绩效与平均绩效薪酬差距仅 {pay_perf.get("a_vs_b_gap_pct", 0)}%，激励区分度不足',
+        })
 
-    return findings[:4]  # Max 4 findings
+    # 人工成本
+    kpi = lab_cost.get('kpi', {})
+    ratio = kpi.get('cost_revenue_ratio')
+    if ratio and ratio > 30:
+        findings.append({
+            'priority': 'P2', 'severity': 'amber',
+            'module': 'labor_cost',
+            'text': f'人工成本占营收 {ratio}%，高于 30% 警戒线',
+        })
 
+    # 按优先级排序
+    priority_order = {'P1': 0, 'P2': 1, 'P3': 2}
+    findings.sort(key=lambda f: priority_order.get(f['priority'], 9))
 
-def get_mock_employees():
-    """Generate mock employee data for testing"""
-    import random
-    random.seed(42)
-
-    departments = ['研发部', '销售部', '市场部', '人力资源部', '行政部']
-    grades = ['Level2-1', 'Level2-2', 'Level3-1', 'Level3-2', 'Level4-1', 'Level4-2', 'Level5-1', 'Level5-2']
-    functions = ['招聘', '薪酬管理', 'HRBP', '绩效管理', '人才发展', '员工关系']
-    performances = ['A', 'B+', 'B', 'B-', 'C']
-
-    hay_map = {
-        'Level2-1': 10, 'Level2-2': 11, 'Level3-1': 12, 'Level3-2': 13,
-        'Level4-1': 14, 'Level4-2': 15, 'Level5-1': 16, 'Level5-2': 17,
-    }
-    base_salary_map = {
-        'Level2-1': 7000, 'Level2-2': 8000, 'Level3-1': 10000, 'Level3-2': 12000,
-        'Level4-1': 15000, 'Level4-2': 18000, 'Level5-1': 22000, 'Level5-2': 26000,
-    }
-
-    employees = []
-    for i in range(80):
-        grade = random.choice(grades)
-        base = base_salary_map[grade]
-        # Add some variance
-        base = int(base * random.uniform(0.8, 1.25))
-        bonus = int(base * random.uniform(1.0, 3.0))
-
-        emp = {
-            'id': f'EMP{i + 1:03d}',
-            'department': random.choice(departments),
-            'grade': grade,
-            'hay_grade': hay_map[grade],
-            'job_function': random.choice(functions),
-            'base_monthly': base,
-            'annual_bonus': bonus,
-            'performance': random.choice(performances),
-            'cr': None,  # Will be calculated
-        }
-        employees.append(emp)
-
-    return employees
+    return findings[:5]
