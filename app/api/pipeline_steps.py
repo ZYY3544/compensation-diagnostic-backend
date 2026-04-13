@@ -124,9 +124,15 @@ def run_cleansing(session_id):
             m.setdefault('reverted', False)
             m.setdefault('auto_applied', m.get('confidence') != 'low' and m.get('new_value') is not None)
 
+        # 日志：看 AI 返回了什么
+        print(f'[Cleansing] AI returned {len(mutations)} mutations')
+        for m in mutations:
+            print(f'  - row={m.get("row_number")} field={m.get("field")} old={m.get("old_value")} new={m.get("new_value")} conf={m.get("confidence")}')
+
         # Step 3: 校验 + 执行
         from app.services.mutation_engine import validate_mutations, apply_mutations
         mutations = validate_mutations(mutations, employees, field_map)
+        print(f'[Cleansing] after validation: {len(mutations)} mutations')
         auto = [m for m in mutations if m.get('auto_applied')]
         apply_mutations(employees, auto, field_map)
 

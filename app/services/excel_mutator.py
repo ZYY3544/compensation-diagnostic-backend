@@ -5,8 +5,9 @@ import openpyxl
 from openpyxl.styles import PatternFill
 from openpyxl.comments import Comment
 
-HIGHLIGHT_FILL = PatternFill(start_color='FFFFCC00', end_color='FFFFCC00', fill_type='solid')
-REVERTED_FILL = PatternFill(start_color='FFCCCCCC', end_color='FFCCCCCC', fill_type='solid')
+HIGHLIGHT_FILL = PatternFill(start_color='FFFFCC00', end_color='FFFFCC00', fill_type='solid')  # 黄色：已修正
+WARNING_FILL = PatternFill(start_color='FFFDE68A', end_color='FFFDE68A', fill_type='solid')   # 浅黄：需确认
+REVERTED_FILL = PatternFill(start_color='FFCCCCCC', end_color='FFCCCCCC', fill_type='solid')   # 灰色：已撤回
 
 
 def _col_index(field: str, field_map: dict, column_names: list) -> int:
@@ -25,28 +26,43 @@ def create_marked_excel(
     column_names: list,
 ) -> str:
     """
-    复制原始 Excel，对每条 mutation 修改对应单元格的值 + 标黄 + 加批注。
-    返回 output_path。
+    复制原始 Excel，对每条 mutation 标记对应单元格。
+    - 已修正（有 new_value）：改值 + 黄色底色 + 批注
+    - 需确认（new_value=None）：不改值 + 浅黄底色 + 批注
     """
     wb = openpyxl.load_workbook(source_path)
     ws = wb.active
 
+    marked_count = 0
     for m in mutations:
-        if m.get('reverted') or m.get('new_value') is None:
+        if m.get('reverted'):
             continue
         col_idx = _col_index(m['field'], field_map, column_names)
         if col_idx < 0:
+            print(f'[ExcelMutator] field "{m["field"]}" not found in field_map, skipping row {m.get("row_number")}')
             continue
         row = m['row_number']
         cell = ws.cell(row=row, column=col_idx)
         old_val = cell.value
-        cell.value = m['new_value']
-        cell.fill = HIGHLIGHT_FILL
-        cell.comment = Comment(
-            f"Sparky 修正\n原始值: {old_val}\n{m.get('description', '')}",
-            'Sparky'
-        )
 
+        if m.get('new_value') is not None:
+            # 已修正：改值 + 黄色
+            cell.value = m['new_value']
+            cell.fill = HIGHLIGHT_FILL
+            cell.comment = Comment(
+                f"Sparky 已修正\n原始值: {old_val}\n{m.get('description', '')}",
+                'Sparky'
+            )
+        else:
+            # 需确认：不改值 + 浅黄标记
+            cell.fill = WARNING_FILL
+            cell.comment = Comment(
+                f"Sparky 标记：需确认\n{m.get('description', '')}",
+                'Sparky'
+            )
+        marked_count += 1
+
+    print(f'[ExcelMutator] marked {marked_count}/{len(mutations)} cells in {output_path}')
     wb.save(output_path)
     wb.close()
     return output_path
