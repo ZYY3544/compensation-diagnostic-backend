@@ -1,5 +1,13 @@
 import json
+from datetime import date, datetime
 from app.agents.base_agent import BaseAgent
+
+
+class _SafeEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, (date, datetime)):
+            return o.isoformat()
+        return super().default(o)
 
 
 class CleansingAgent(BaseAgent):
@@ -22,7 +30,7 @@ class CleansingAgent(BaseAgent):
 
         messages = [
             {"role": "system", "content": self.system_prompt},
-            {"role": "user", "content": json.dumps(ai_problems, ensure_ascii=False, indent=2)},
+            {"role": "user", "content": json.dumps(ai_problems, ensure_ascii=False, indent=2, cls=_SafeEncoder)},
         ]
 
         response = self.call_llm(messages)

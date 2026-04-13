@@ -4,7 +4,15 @@
 import os
 import json
 import traceback
+from datetime import date, datetime
 from flask import Blueprint, jsonify, request, send_file
+
+
+class _SafeEncoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, (date, datetime)):
+            return o.isoformat()
+        return super().default(o)
 
 pipeline_bp = Blueprint('pipeline', __name__)
 
@@ -111,7 +119,7 @@ def run_cleansing(session_id):
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(prompt_data, ensure_ascii=False, indent=2)},
+            {"role": "user", "content": json.dumps(prompt_data, ensure_ascii=False, indent=2, cls=_SafeEncoder)},
         ]
         response = writer.call_llm(messages)
 
