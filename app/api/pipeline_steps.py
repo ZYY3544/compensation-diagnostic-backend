@@ -20,20 +20,18 @@ def run_cleansing(session_id):
     # 如果已经跑过，直接返回缓存
     if session.get('_ai_cleansing_done'):
         return jsonify({
-            'cleansing_corrections': session.get('_merged_corrections', session.get('_base_corrections', [])),
+            'cleansing_corrections': session.get('_merged_corrections', []),
         })
 
     code_results = session.get('_code_results')
-    base_corrections = list(session.get('_base_corrections', []))
-
     if not code_results:
-        return jsonify({'cleansing_corrections': base_corrections})
+        return jsonify({'cleansing_corrections': []})
 
     import os
     if not os.getenv('OPENROUTER_API_KEY', '').strip():
         session['_ai_cleansing_done'] = True
-        session['_merged_corrections'] = base_corrections
-        return jsonify({'cleansing_corrections': base_corrections})
+        session['_merged_corrections'] = []
+        return jsonify({'cleansing_corrections': []})
 
     try:
         # Step 1: CleansingAgent 做专业判断（年化/异常值/绩效映射等）
@@ -79,12 +77,12 @@ def run_cleansing(session_id):
             response = response.split('```')[1].split('```')[0]
         corrections = json.loads(response.strip())
         if not isinstance(corrections, list):
-            corrections = base_corrections
+            corrections = []
     except Exception as e:
         print(f'[Pipeline] AI cleansing failed: {e}')
         import traceback
         traceback.print_exc()
-        corrections = base_corrections
+        corrections = []
 
     session['_merged_corrections'] = corrections
     session['_ai_cleansing_done'] = True

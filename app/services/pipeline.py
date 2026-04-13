@@ -113,15 +113,12 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
         print(f'[Pipeline] code checks failed: {e}')
         traceback.print_exc()
 
-    corrections = _build_corrections_from_code(code_results)
-
     # 占位：职级/职能匹配用 fallback（全 low confidence），等用户走到那步再调 LLM
     grade_matching = _fallback_grade_matching(grades_list)
     function_matching = _fallback_function_matching_from_employees(employees)
 
     # 把中间状态存到 session，供后续 LLM 步骤使用
     session['_code_results'] = code_results
-    session['_base_corrections'] = corrections
     session['_grades_list'] = grades_list
     session['_field_map'] = field_map
     session['_employees'] = employees
@@ -141,14 +138,14 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
             'row_missing': row_missing[:20],
             'column_missing': column_missing,
         },
-        'cleansing_corrections': corrections,
+        'cleansing_corrections': [],  # 由 /pipeline/{id}/cleansing AI 生成
         'grade_matching': grade_matching,
         'function_matching': function_matching,
         'data_completeness_score': completeness_score,
         'unlocked_modules': unlocked,
         'locked_modules': locked,
         'sparky_messages': _build_sparky_messages(
-            row_missing, column_missing, corrections,
+            row_missing, column_missing, [],
             grade_matching, function_matching, unlocked, locked,
         ),
         '_employees': employees,
@@ -279,170 +276,6 @@ def _compute_modules(has_performance: bool, has_company_data: bool):
         locked.append({'name': '人工成本趋势分析', 'reason': '缺少公司经营数据'})
     return unlocked, locked
 
-
-def _build_corrections_from_code(code_results: dict | None) -> list:
-    """把代码层检测结果转换成前端期望的 cleansing_corrections 格式"""
-    if not code_results:
-        return []
-
-    corrections = []
-    corr_id = 0
-
-    # 年化候选
-    annualize = code_results.get('needs_annualize', [])
-    if annualize:
-        rows_str = '、'.join(str(a['row_number']) for a in annualize[:5])
-        corr_id += 1
-        corrections.append({
-            'id': corr_id,
-            'description': f'第 {rows_str} 行浮动奖金已年化处理（入司不满 1 年）',
-            'type': 'annualize_bonus',
-        })
-
-    # 13薪重叠
-    thirteenth = code_results.get('possible_13th_overlap', [])
-    if thirteenth:
-        corr_id += 1
-        corrections.append({
-            'id': corr_id,
-            'description': f'发现 {len(thirteenth)} 条记录浮动奖金疑似包含固定奖金部分，已标记',
-            'type': '13th_month_reclassify',
-        })
-
-    # 月薪异常值
-    salary_out = code_results.get('salary_outliers', [])
-    if salary_out:
-        rows_str = '、'.join(str(s['row_number']) for s in salary_out[:3])
-        corr_id += 1
-        corrections.append({
-            'id': corr_id,
-            'description': f'第 {rows_str} 行基本工资偏离同级中位值超3倍，已标记为异常值',
-            'type': 'extreme_value',
-        })
-
-    # 年终奖异常值
-    bonus_out = code_results.get('bonus_outliers', [])
-    if bonus_out:
-        rows_str = '、'.join(str(b['row_number']) for b in bonus_out[:3])
-        corr_id += 1
-        corrections.append({
-            'id': corr_id,
-            'description': f'第 {rows_str} 行浮动奖金偏离同级中位值超3倍，已标记为异常值',
-            'type': 'extreme_value',
-        })
-
-    # 薪酬倒挂
-    inversions = code_results.get('salary_inversions', [])
-    if inversions:
-        corr_id += 1
-        corrections.append({
-            'id': corr_id,
-            'description': f'发现 {len(inversions)} 对上下级薪酬倒挂，已标记',
-            'type': 'salary_inversion',
-        })
-
-    # 津贴异常
-    allowance_alerts = code_results.get('allowance_alerts', [])
-    if allowance_alerts:
-        corr_id += 1
-        corrections.append({
-            'id': corr_id,
-            'description': f'{len(allowance_alerts)} 条记录津贴超月薪30%，已标记',
-            'type': 'allowance_high',
-        })
-
-    # 入司日期异常
-    future_dates = code_results.get('future_dates', [])
-    old_dates = code_results.get('old_dates', [])
-    date_issues = future_dates + old_dates
-    if date_issues:
-        corr_id += 1
-        corrections.append({
-            'id': corr_id,
-            'description': f'{len(date_issues)} 条记录入司时间异常（未来日期或过早），已标记',
-            'type': 'date_anomaly',
-        })
-
-    # 高年终奖疑似长期激励
-    high_bonus = code_results.get('high_bonus_suspects', [])
-    if high_bonus:
-        corr_id += 1
-        corrections.append({
-            'id': corr_id,
-            'description': f'{len(high_bonus)} 条高职级员工年终奖远超同级中位值，疑似包含长期激励',
-            'type': 'lti_suspect',
-        })
-
-    return corrections
-
-
-def _merge_ai_corrections(corrections: list, ai_results: dict, code_results: dict) -> list:
-    """把 AI 判断结果合并进 corrections，只保留自动修正项（不保留需用户确认的）"""
-    judgments = ai_results.get('judgments', [])
-    corr_id = max((c['id'] for c in corrections), default=0)
-
-    for j in judgments:
-        # 只保留不需要用户确认的自动修正项
-        if j.get('needs_user_confirm', False):
-            continue
-        action = j.get('action', '')
-        if not action:
-            continue
-        corr_id += 1
-        # 格式化成用户看得懂的描述
-        desc = _format_ai_judgment(j)
-        corrections.append({
-            'id': corr_id,
-            'description': desc,
-            'type': j.get('rule', 'ai_judgment'),
-        })
-
-    # 绩效映射
-    perf_mapping = ai_results.get('performance_mapping')
-    if perf_mapping and isinstance(perf_mapping, dict):
-        detected = perf_mapping.get('detected_system', '')
-        mapping = perf_mapping.get('mapping', {})
-        confidence = perf_mapping.get('confidence', '')
-        if mapping:
-            corr_id += 1
-            # 格式化成人话
-            from_vals = list(mapping.keys())[:4]
-            to_vals = list(mapping.values())[:4]
-            from_str = '/'.join(str(v) for v in from_vals)
-            to_str = '/'.join(str(v) for v in to_vals)
-            corrections.append({
-                'id': corr_id,
-                'description': f'绩效等级已标准化（{from_str} → {to_str}）',
-                'type': 'performance_mapping',
-            })
-
-    return corrections
-
-
-def _format_ai_judgment(judgment: dict) -> str:
-    """把 AI 判断结果格式化成用户看得懂的描述"""
-    rule = judgment.get('rule', '')
-    rows = judgment.get('rows', [])
-    action = judgment.get('action', '')
-    judgment_text = judgment.get('judgment', '')
-
-    rows_str = '、'.join(str(r) for r in rows[:5]) if rows else ''
-
-    if '年化' in rule or '年化' in action:
-        return f'第 {rows_str} 行年终奖已年化处理（AI 判断为按月折算而非保底奖金）'
-    elif '异常' in rule or '录入错误' in judgment_text:
-        return f'第 {rows_str} 行薪酬异常值已修正（AI 判断为录入错误）'
-    elif '13薪' in rule or '重复' in rule:
-        return f'第 {rows_str} 行年终奖中13薪部分已分离'
-    elif '长期激励' in rule or 'LTI' in rule.upper():
-        return f'第 {rows_str} 行年终奖中疑似长期激励部分已标记'
-    elif '部门' in rule:
-        return f'部门名称已归并标准化'
-    else:
-        # 通用格式
-        if judgment_text:
-            return f'{judgment_text}（涉及第 {rows_str} 行）' if rows_str else judgment_text
-        return action
 
 
 def _run_grade_matching(grades_list: list, employees: list, rows: list, field_map: dict, code_results: dict | None) -> list:
