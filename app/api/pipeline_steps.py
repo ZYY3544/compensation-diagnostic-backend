@@ -77,17 +77,12 @@ def run_cleansing(session_id):
         return jsonify({'cleansing_corrections': [], 'sparky_message': '', 'has_export': False})
 
     try:
-        # Step 1: CleansingAgent 做专业判断
-        from app.agents.cleansing_agent import CleansingAgent
-        agent = CleansingAgent()
-        ai_judgments = agent.run(code_results)
-
-        # Step 2: 生成结构化修改指令
+        # 一次 LLM 调用：直接生成结构化修改指令（不再单独调 CleansingAgent）
         from app.agents.base_agent import BaseAgent
         writer = BaseAgent(temperature=0.3)
         system_prompt = writer.load_prompt('cleansing_mutations.txt')
 
-        # 准备数据：代码检测 + AI 判断 + 涉及行的实际数据
+        # 只传有问题的行的数据，控制 prompt 大小
         flagged_rows = set()
         for key in ('needs_annualize', 'salary_outliers', 'bonus_outliers',
                      'possible_13th_overlap', 'salary_inversions',
@@ -107,14 +102,17 @@ def run_cleansing(session_id):
                              'performance', 'hire_date')
                 })
 
+        # 精简 code_results，去掉大体积字段
+        slim_results = {
+            k: v for k, v in code_results.items()
+            if k not in ('sample_rows', 'data_summary', 'field_mapping') and v
+        }
+
         prompt_data = {
-            'code_detections': {
-                k: v for k, v in code_results.items()
-                if k not in ('sample_rows',) and v
-            },
-            'ai_judgments': ai_judgments if not ai_judgments.get('error') else None,
+            'code_detections': slim_results,
             'flagged_employees': employee_context,
-            'field_map': field_map,
+            'performance_values': code_results.get('performance_values', []),
+            'unique_departments': code_results.get('unique_departments', []),
         }
 
         messages = [
