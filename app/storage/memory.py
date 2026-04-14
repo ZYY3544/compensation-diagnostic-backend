@@ -58,3 +58,16 @@ class MemoryStorage(BaseStorage):
             [i for i in self._invocations.values() if i.get('conv_id') == conv_id],
             key=lambda i: i.get('invoked_at', ''),
         )
+
+    # ====== Legacy session（兼容期间用）======
+    def __init_legacy__(self):
+        if not hasattr(self, '_sessions'):
+            self._sessions: dict[str, dict] = {}
+
+    def get_legacy_session(self, session_id: str):
+        self.__init_legacy__()
+        return self._sessions.get(session_id)
+
+    def save_legacy_session(self, session_id: str, data: dict) -> None:
+        self.__init_legacy__()
+        self._sessions[session_id] = data

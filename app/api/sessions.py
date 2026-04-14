@@ -2,11 +2,13 @@ from flask import Blueprint, jsonify, request
 import uuid
 import json
 from datetime import datetime
+from app.storage.session_proxy import SessionsStore
 
 sessions_bp = Blueprint('sessions', __name__)
 
-# In-memory store for MVP (replace with Supabase later)
-sessions_store = {}
+# Session store: MemoryStorage 或 SupabaseStorage 自动切换
+# 接口仍兼容 dict（.get / [id] / in），但所有读写都过 storage
+sessions_store = SessionsStore()
 
 
 def _generate_welcome():
