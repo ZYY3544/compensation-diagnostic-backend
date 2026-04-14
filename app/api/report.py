@@ -349,13 +349,21 @@ def _generate_key_findings(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
     """生成 3-5 条关键发现，按优先级排序"""
     findings = []
 
-    # 外部竞争力
+    # 外部竞争力 —— 偏低
     overall_cr = ext_comp.get('overall_cr')
     if overall_cr and overall_cr < 0.9:
         findings.append({
             'priority': 'P1', 'severity': 'red',
             'module': 'external_competitiveness',
             'text': f'整体薪酬竞争力不足（CR {overall_cr}），{ext_comp.get("total_below_p25", 0)} 人低于市场 P25',
+        })
+
+    # 外部竞争力 —— 偏高（overpay，也是问题：人工成本虚高或数据口径有误）
+    if overall_cr and overall_cr > 2.0:
+        findings.append({
+            'priority': 'P2', 'severity': 'amber',
+            'module': 'external_competitiveness',
+            'text': f'整体薪酬显著高于市场（CR {overall_cr}，>P75 x 2），建议核对职级对标口径或市场分位取值',
         })
 
     for f in ext_comp.get('cr_by_function', []):
@@ -376,11 +384,29 @@ def _generate_key_findings(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
         })
 
     # 绩效关联
-    if pay_perf.get('has_data') and not pay_perf.get('spread_adequate'):
+    if pay_perf.get('has_data'):
+        gap = pay_perf.get('a_vs_b_gap_pct')
+        if gap is not None and gap < 15:
+            findings.append({
+                'priority': 'P2', 'severity': 'amber',
+                'module': 'pay_performance',
+                'text': f'高绩效与平均绩效薪酬差距仅 {gap}%，激励区分度不足',
+            })
+        elif gap is not None and gap > 50:
+            # 差距过大也要提示——可能数据有问题或过度分化
+            findings.append({
+                'priority': 'P2', 'severity': 'amber',
+                'module': 'pay_performance',
+                'text': f'高绩效与平均绩效薪酬差距 {gap}%（>50%），绩效薪酬分化过激，建议核对异常个体或政策边界',
+            })
+
+    # 薪酬结构 —— 固定占比过高
+    fix_pct = fix_var.get('overall_fix_pct')
+    if fix_pct is not None and fix_pct > 85:
         findings.append({
             'priority': 'P2', 'severity': 'amber',
-            'module': 'pay_performance',
-            'text': f'高绩效与平均绩效薪酬差距仅 {pay_perf.get("a_vs_b_gap_pct", 0)}%，激励区分度不足',
+            'module': 'fix_variable_ratio',
+            'text': f'固定薪酬占比 {fix_pct}%（>85%），薪酬包刚性过强，调薪腾挪空间与绩效激励弹性不足',
         })
 
     # 人工成本
