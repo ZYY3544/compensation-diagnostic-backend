@@ -2,6 +2,7 @@ services:
   - type: web
     name: compensation-diagnostic-backend
     runtime: python
+    pythonVersion: 3.12.7   # 锁 3.12；不锁的话 Render 默认跳到 3.14，openpyxl 会崩
     repo: https://github.com/ZYY3544/compensation-diagnostic-backend
     branch: main
     buildCommand: pip install -r requirements.txt
