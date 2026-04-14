@@ -1,114 +1,108 @@
 """
-外部市场对标（轻模式）：指定维度（职级 / 职能 / 部门 / 全公司）跟市场对比。
+Skill: 外部市场对标
+
+轻模式。查询指定部门/职级/职能的薪酬在市场中的分位值。
+用户问"研发 L5 跟市场比怎么样"就触发这个。
 """
-from collections import defaultdict
-from app.engine.common import calculate_cr, calculate_percentile_position, safe_mean
-from app.services.market_data import lookup_market_salary
 
+SKILL = {
+    "key": "external_benchmark",
+    "display_name": "外部市场对标",
+    "mode": "light",
+    "chip_label": "🔍 查一下市场薪酬水平",
 
-def run(employees: list, params: dict) -> dict:
-    """
-    params: {
-      'dimension': 'grade' | 'function' | 'department' | 'overall',
-      'filter': {'grade': 'L5', 'department': '研发部', ...}
-    }
-    返回结构化结果，叙事引擎读取生成 Sparky 文案。
-    """
-    dimension = params.get('dimension', 'grade')
-    filt = params.get('filter', {}) or {}
+    "triggers": [
+        r"市场.*对标",
+        r"跟市场.*比",
+        r"市场.*水平",
+        r"薪酬.*竞争力",
+        r"P\d+",
+        r"分位",
+        r"有没有竞争力",
+        r"比市场.*高|低",
+        r"外部.*竞争",
+    ],
 
-    # 按筛选条件过滤
-    filtered = _apply_filter(employees, filt)
-    if not filtered:
-        return {'error': '符合条件的员工数据不足', 'count': 0}
+    "preconditions": [
+        "has_data_snapshot",
+        "has_market_data",
+    ],
 
-    # 给每个员工算 CR 和分位
-    enriched = []
-    for emp in filtered:
-        jf = emp.get('job_function', '')
-        hg = emp.get('hay_grade')
-        market = lookup_market_salary(jf, hg) if jf and hg else None
-        if market and market['base_p50'] > 0:
-            cr = calculate_cr(emp.get('base_monthly', 0), market['base_p50'])
-            pct = calculate_percentile_position(
-                emp.get('base_monthly', 0),
-                market['base_p25'], market['base_p50'], market['base_p75'],
-            )
-            enriched.append({**emp, '_cr': cr, '_pct': pct, '_market': market})
+    "input_params": {
+        "scope": {
+            "type": "enum",
+            "options": ["全公司", "指定部门", "指定职级", "指定职能"],
+            "default": "全公司",
+            "required": False,
+            "resolve": "从用户消息中提取，提取不到默认全公司",
+        },
+        "department": {
+            "type": "string",
+            "required": False,
+            "resolve": "从用户消息中提取部门名称",
+            "example": "研发",
+        },
+        "grade": {
+            "type": "string",
+            "required": False,
+            "resolve": "从用户消息中提取职级",
+            "example": "L5",
+        },
+        "function": {
+            "type": "string",
+            "required": False,
+            "resolve": "从用户消息中提取职能",
+            "example": "软件开发",
+        },
+    },
 
-    if not enriched:
-        return {'error': '市场数据未覆盖这些岗位', 'count': len(filtered)}
+    "engine": "app.engine.external_competitiveness.analyze",
 
-    # 按维度聚合
-    if dimension == 'grade':
-        groups = _group_by(enriched, 'grade')
-    elif dimension == 'function':
-        groups = _group_by(enriched, 'job_function')
-    elif dimension == 'department':
-        groups = _group_by(enriched, 'department')
-    else:  # overall
-        groups = {'全公司': enriched}
+    "narrative_prompt": "prompts/benchmark_insight.txt",
 
-    rows = []
-    for name, emps in groups.items():
-        crs = [e['_cr'] for e in emps if e.get('_cr') is not None]
-        pcts = [e['_pct'] for e in emps if e.get('_pct') is not None]
-        if not crs:
-            continue
-        avg_cr = round(safe_mean(crs), 2)
-        avg_pct = round(safe_mean(pcts)) if pcts else None
-        median_salary = _median([e.get('base_monthly', 0) for e in emps])
-        market_p50 = _median([e['_market']['base_p50'] for e in emps if e.get('_market')])
-        market_p25 = _median([e['_market']['base_p25'] for e in emps if e.get('_market')])
-        market_p75 = _median([e['_market']['base_p75'] for e in emps if e.get('_market')])
-        rows.append({
-            'name': str(name),
-            'headcount': len(emps),
-            'actual_median': round(median_salary),
-            'market_p25': round(market_p25),
-            'market_p50': round(market_p50),
-            'market_p75': round(market_p75),
-            'avg_cr': avg_cr,
-            'avg_percentile': avg_pct,
-            'gap_to_p50': round(median_salary - market_p50),
-            'status': 'low' if avg_pct and avg_pct < 25 else 'mid' if avg_pct and avg_pct < 50 else 'ok',
-        })
+    "render_components": [
+        {
+            "type": "MetricGrid",
+            "columns": 3,
+            "metrics": [
+                {"label": "整体市场分位", "field": "summary.avg_percentile", "format": "P{value}", "color_rule": "<25 red, 25-50 orange, >50 green"},
+                {"label": "低于P25人数", "field": "summary.below_p25_count", "sub_field": "summary.below_p25_pct", "sub_format": "占比 {value}%"},
+                {"label": "分析人数", "field": "summary.total_headcount"},
+            ],
+        },
+        {
+            "type": "BarHCard",
+            "title": "各层级市场分位值",
+            "group_by": "department",
+            "bar_label": "grade",
+            "bar_value": "percentile",
+            "bar_max": 100,
+            "marker": 50,
+            "color_rule": "<25 red, 25-50 orange, >50 green",
+            "footer": "竖线 = 市场 P50 · 低于 P25 标红",
+        },
+    ],
 
-    rows.sort(key=lambda r: r.get('avg_percentile') or 50)
-
-    total_cr = round(safe_mean([r['avg_cr'] for r in rows]), 2)
-    lowest = rows[0] if rows else None
-
-    return {
-        'dimension': dimension,
-        'filter': filt,
-        'total_employees': len(enriched),
-        'rows': rows,
-        'overall_cr': total_cr,
-        'lowest_group': lowest,
-    }
-
-
-def _apply_filter(employees: list, filt: dict) -> list:
-    result = employees
-    for k, v in filt.items():
-        if not v:
-            continue
-        result = [e for e in result if str(e.get(k, '')) == str(v)]
-    return result
-
-
-def _group_by(items: list, key: str) -> dict:
-    groups = defaultdict(list)
-    for item in items:
-        k = item.get(key) or '未知'
-        groups[k].append(item)
-    return dict(groups)
-
-
-def _median(values: list) -> float:
-    vs = sorted(v for v in values if v and v > 0)
-    if not vs:
-        return 0
-    n = len(vs)
-    return vs[n // 2] if n % 2 == 1 else (vs[n // 2 - 1] + vs[n // 2]) / 2
+    "output_schema": {
+        "benchmark_results": [
+            {
+                "grade": "L5",
+                "function": "软件开发",
+                "headcount": 8,
+                "company_median": 300000,
+                "market_p25": 336000,
+                "market_p50": 420000,
+                "market_p75": 528000,
+                "percentile": 23,
+                "gap_to_p50": -120000,
+                "status": "below_p25",
+            }
+        ],
+        "summary": {
+            "total_headcount": 49,
+            "below_p25_count": 22,
+            "below_p25_pct": 44.9,
+            "avg_percentile": 38,
+        },
+    },
+}

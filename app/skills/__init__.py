@@ -1,1 +1,4 @@
-"""轻模式能力实现，每个 skill 一个模块。"""
+from .registry import get_registry, auto_discover
+
+# 启动时自动发现并注册所有 skill
+auto_discover()
