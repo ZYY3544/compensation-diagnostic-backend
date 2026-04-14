@@ -8,7 +8,16 @@ from collections import defaultdict
 from app.engine.common import calculate_dispersion, calculate_range_ratio, safe_mean
 
 
-def analyze(employees):
+def analyze(data_snapshot=None, params=None):
+    """统一 skill 签名 + 兼容旧调用 analyze(employees)"""
+    if isinstance(data_snapshot, list):
+        return _analyze_impl(data_snapshot)
+    if not isinstance(data_snapshot, dict):
+        data_snapshot = {}
+    return _analyze_impl(data_snapshot.get('employees') or [])
+
+
+def _analyze_impl(employees):
     departments = sorted(set(e.get('department', '') for e in employees if e.get('department')))
     grades = sorted(set(e.get('grade', '') for e in employees if e.get('grade')))
 

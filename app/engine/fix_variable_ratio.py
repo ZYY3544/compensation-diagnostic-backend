@@ -7,7 +7,16 @@ from collections import defaultdict
 from app.engine.common import safe_mean
 
 
-def analyze(employees):
+def analyze(data_snapshot=None, params=None):
+    """统一 skill 签名 + 兼容旧调用 analyze(employees)"""
+    if isinstance(data_snapshot, list):
+        return _analyze_impl(data_snapshot)
+    if not isinstance(data_snapshot, dict):
+        data_snapshot = {}
+    return _analyze_impl(data_snapshot.get('employees') or [])
+
+
+def _analyze_impl(employees):
     # 按职级分组
     grade_data = defaultdict(lambda: {'fixed': [], 'variable': [], 'tcc': []})
     dept_data = defaultdict(lambda: {'fixed': [], 'variable': [], 'tcc': []})

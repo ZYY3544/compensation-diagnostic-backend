@@ -11,7 +11,16 @@ from app.engine.common import safe_mean
 PERF_ORDER = ['A', 'B+', 'B', 'B-', 'C']
 
 
-def analyze(employees):
+def analyze(data_snapshot=None, params=None):
+    """统一 skill 签名 + 兼容旧调用 analyze(employees)"""
+    if isinstance(data_snapshot, list):
+        return _analyze_impl(data_snapshot)
+    if not isinstance(data_snapshot, dict):
+        data_snapshot = {}
+    return _analyze_impl(data_snapshot.get('employees') or [])
+
+
+def _analyze_impl(employees):
     # 按绩效分组
     perf_groups = defaultdict(list)
     for emp in employees:

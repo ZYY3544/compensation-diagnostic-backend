@@ -6,7 +6,18 @@
 """
 
 
-def analyze(employees, company_data=None, sheet2_summary=None):
+def analyze(data_snapshot=None, params=None, company_data=None, sheet2_summary=None):
+    """统一 skill 签名 + 兼容旧调用 analyze(employees, ...)"""
+    if isinstance(data_snapshot, list):
+        return _analyze_impl(data_snapshot, company_data, sheet2_summary)
+    if not isinstance(data_snapshot, dict):
+        data_snapshot = {}
+    emps = data_snapshot.get('employees') or []
+    s2 = (data_snapshot.get('full_analysis') or {}).get('_sheet2_summary') or sheet2_summary
+    return _analyze_impl(emps, company_data, s2)
+
+
+def _analyze_impl(employees, company_data=None, sheet2_summary=None):
     """
     company_data: 当年经营数据（从 Sheet 2 解析）
     sheet2_summary: Sheet 2 的年度数据（含 years 和 metrics）
