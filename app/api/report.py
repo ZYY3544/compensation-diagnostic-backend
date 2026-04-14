@@ -72,7 +72,46 @@ def run_analysis(session_id):
     session['status'] = 'report_done'
     session['analysis_results'] = report
 
+    # ==============================
+    # 持久化 DataSnapshot（把 session 里的数据写入 data_snapshots 表）
+    # 后续轻模式查询可直接从这里读，不用重新上传
+    # ==============================
+    _persist_snapshot(session_id, session, full, report)
+
     return jsonify(report), 200
+
+
+def _persist_snapshot(snapshot_id, session, full_analysis, report):
+    """把 session 的关键数据同步到 DataSnapshot"""
+    try:
+        from app.storage import get_storage
+        from datetime import datetime
+        storage = get_storage()
+        existing = storage.get_snapshot(snapshot_id) or {}
+        snapshot = {
+            **existing,
+            'snapshot_id': snapshot_id,
+            'status': 'analyzed',
+            'cleaned_employees': session.get('cleaned_employees') or session.get('_employees', []),
+            'employees_original': session.get('_employees_original', []),
+            'interview_notes': session.get('interview_notes'),
+            'parse_result': session.get('parse_result'),
+            'grade_mapping': session.get('_grade_match_result'),
+            'func_mapping': session.get('_func_match_result'),
+            'full_analysis_json': full_analysis,
+            'analyzed_at': datetime.utcnow().isoformat(),
+            'code_results': session.get('_code_results'),
+            'field_map': session.get('_field_map'),
+            'column_names': session.get('_column_names'),
+            'grades_list': session.get('_grades_list'),
+            'mutations': session.get('_mutations'),
+        }
+        storage.save_snapshot(snapshot)
+        print(f'[Snapshot] persisted {snapshot_id}')
+    except Exception as e:
+        print(f'[Snapshot] persist failed: {e}')
+        import traceback
+        traceback.print_exc()
 
 
 # ======================================================================

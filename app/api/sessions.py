@@ -35,12 +35,16 @@ def _generate_welcome():
 
 @sessions_bp.route('/', methods=['POST'])
 def create_session():
-    """Create a new diagnostic session"""
+    """Create a new diagnostic session + DataSnapshot（持久化）"""
     session_id = str(uuid.uuid4())
+    now = datetime.utcnow().isoformat()
+
+    # 建 session（legacy）
     sessions_store[session_id] = {
         'id': session_id,
+        'snapshot_id': session_id,   # session_id == snapshot_id（一次诊断 = 一次快照）
         'status': 'created',
-        'created_at': datetime.utcnow().isoformat(),
+        'created_at': now,
         'employee_count': 0,
         'data_completeness_score': 0,
         'unlocked_modules': [],
@@ -49,6 +53,28 @@ def create_session():
         'interview_notes': None,
         'analysis_results': None,
     }
+
+    # 同步建 DataSnapshot（空壳，后续 upload/analyze 填充）
+    try:
+        from app.storage import get_storage
+        storage = get_storage()
+        # 默认 user_id：先用 session_id 自身。等接真实用户系统再改
+        user_id = 'anon_' + session_id[:8]
+        storage.save_user({
+            'user_id': user_id,
+            'org_name': None,
+            'role': None,
+            'created_at': now,
+        })
+        storage.save_snapshot({
+            'snapshot_id': session_id,
+            'user_id': user_id,
+            'uploaded_at': now,
+            'status': 'draft',
+        })
+    except Exception as e:
+        print(f'[Session] snapshot init failed: {e}')
+
     resp = dict(sessions_store[session_id])
     resp['welcome'] = _generate_welcome()
     return jsonify(resp), 201
