@@ -40,13 +40,22 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
         if dept:
             departments.add(str(dept))
 
-        base_annual = _safe_float(_get_mapped(d, field_map, 'base_salary'))
+        base_raw = _safe_float(_get_mapped(d, field_map, 'base_salary'))
+        # 判断列名是月度还是年度，正确换算
+        base_col_name = field_map.get('base_salary', '')
+        is_monthly_col = any(kw in base_col_name for kw in ['月度', '月薪', 'monthly'])
+        if is_monthly_col:
+            base_monthly = base_raw
+            base_annual = base_raw * 12
+        else:
+            base_annual = base_raw
+            base_monthly = base_raw / 12 if base_raw else 0
+
         fixed_bonus = _safe_float(_get_mapped(d, field_map, 'fixed_bonus'))
         variable_bonus = _safe_float(_get_mapped(d, field_map, 'variable_bonus'))
         cash_allowance = _safe_float(_get_mapped(d, field_map, 'cash_allowance'))
         reimbursement = _safe_float(_get_mapped(d, field_map, 'reimbursement'))
         tcc = base_annual + fixed_bonus + variable_bonus + cash_allowance
-        base_monthly = base_annual / 12 if base_annual else 0
         emp = {
             'row_number': row['row_number'],
             'id': _get_mapped(d, field_map, 'employee_id') or f'ROW{row["row_number"]}',

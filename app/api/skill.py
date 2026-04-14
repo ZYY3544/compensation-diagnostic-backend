@@ -84,6 +84,8 @@ def invoke():
     missing = registry.get_missing_params(skill_key, params)
     if missing:
         return jsonify({'error': 'missing_params', 'missing': missing}), 400
+    # 补 default 值
+    params = registry.apply_defaults(skill_key, params)
 
     # 执行 engine
     engine_path = skill.get('engine', '')

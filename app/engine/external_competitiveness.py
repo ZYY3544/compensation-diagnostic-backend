@@ -48,6 +48,23 @@ def _apply_filter(employees, params):
     return result
 
 
+def _guess_market_function(job_title: str, family: str = '') -> str:
+    """从 job_title / family 名称推断市场数据里的 job_function"""
+    t = (job_title or '').lower()
+    f = (family or '')
+    # HR 族细分
+    if 'hrbp' in t or 'hr bp' in t: return 'HRBP'
+    if '招聘' in t or 'recruit' in t: return '招聘'
+    if '薪酬' in t or 'comp' in t or 'c&b' in t: return '薪酬管理'
+    if '绩效' in t: return '绩效管理'
+    if '培训' in t or 'td' in t or '人才发展' in t: return '人才发展'
+    if '员工关系' in t or 'er' in t: return '员工关系'
+    if '组织' in t or 'od' in t: return '组织文化'
+    if 'hr' in t or '人力' in t or f == '人力资源':
+        return 'HRBP'  # 默认 HR 族走 HRBP
+    return ''
+
+
 def _analyze_impl(employees, market_lookup_fn, params=None):
     """
     employees: 清洗后的员工列表，需要有 job_function, hay_grade, tcc, base_monthly, department, grade
@@ -57,7 +74,15 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
     for emp in employees:
         jf = emp.get('job_function', '')
         hg = emp.get('hay_grade')
+        # 先用 emp.job_function 查；查不到用 job_title 关键词兜底映射到市场职能
         market = market_lookup_fn(jf, hg) if jf and hg else None
+        if not market and hg:
+            fallback_jf = _guess_market_function(emp.get('job_title', ''), jf)
+            if fallback_jf and fallback_jf != jf:
+                market = market_lookup_fn(fallback_jf, hg)
+                if market:
+                    jf = fallback_jf
+                    emp['job_function'] = fallback_jf
 
         if market and market['base_p50'] > 0:
             emp['cr'] = calculate_cr(emp.get('base_monthly', 0), market['base_p50'])

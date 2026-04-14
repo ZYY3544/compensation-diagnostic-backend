@@ -269,10 +269,31 @@ def run_grade_match(session_id):
         except Exception as e:
             print(f'[GradeMatch] AI mapping failed: {e}')
 
-    # 没映射到的用默认值
+    # 没映射到的用智能 fallback：从公司职级名里提取数字
+    import re as _re
     for g in grades_list:
         if g not in grade_mapping:
+            m = _re.search(r'(\d+)', str(g))
+            if m:
+                n = int(m.group(1))
+                if 1 <= n <= 7:
+                    grade_mapping[g] = f'Level {n}'
+                    continue
             grade_mapping[g] = 'Level 3'
+
+    # 回写到 employees：hay_grade（基于 Level → 子级 → Hay 映射）
+    # Level N → Level N-1 的 Hay 作为基准
+    level_hay_base = {}
+    for sub_key, hay_val in HAY_GRADE_MAP.items():
+        level_num = sub_key.split('-')[0]  # "Level 3"
+        if level_num not in level_hay_base or sub_key.endswith('-1'):
+            level_hay_base[level_num] = hay_val
+    for emp in employees:
+        company_g = emp.get('grade', '')
+        standard_lv = grade_mapping.get(company_g)
+        if standard_lv and standard_lv in level_hay_base:
+            emp['hay_grade'] = level_hay_base[standard_lv]
+            emp['standard_level'] = standard_lv
 
     # Step 3: AI #2 — 调整建议（只传有信号的人）
     suggestions = []
@@ -404,6 +425,21 @@ def run_func_match(session_id):
     for name in source_names:
         if name not in family_mapping:
             family_mapping[name] = '其他'
+
+    # 回写到 employees：job_function（映射后的标准职能族）
+    # 数据源取决于 build_func_match_data 判断的优先级：
+    #   优先 job_family 列，其次 department 一级，最后 job_title
+    source_field = 'job_family'
+    if not any(e.get('job_family') for e in employees):
+        source_field = 'department'
+    for emp in employees:
+        key = str(emp.get(source_field, '') or '').strip()
+        if not key:
+            key = '未分类'
+        standard_family = family_mapping.get(key)
+        if standard_family:
+            emp['job_function'] = standard_family
+            emp['standard_family'] = standard_family
 
     # Step 3: AI #2 — 每个职位族内的职位类映射 + 岗位异常
     sub_mappings = {}

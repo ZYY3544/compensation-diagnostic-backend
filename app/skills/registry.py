@@ -67,15 +67,34 @@ class SkillRegistry:
     def get_missing_params(self, skill_key: str, provided_params: dict) -> list:
         """
         检查必填参数是否齐全，返回缺失的参数名列表。
+        有 default 值的即使 required=True 也不算缺失。
         """
         skill = self._skills.get(skill_key)
         if not skill:
             return []
         missing = []
         for param_name, param_def in skill["input_params"].items():
-            if param_def.get("required", False) and param_name not in provided_params:
-                missing.append(param_name)
+            if not param_def.get("required", False):
+                continue
+            if param_name in provided_params:
+                continue
+            if "default" in param_def:
+                continue  # 有默认值就不算缺失
+            missing.append(param_name)
         return missing
+
+    def apply_defaults(self, skill_key: str, provided_params: dict) -> dict:
+        """用 input_params 的 default 补齐未提供的参数"""
+        skill = self._skills.get(skill_key)
+        if not skill:
+            return provided_params
+        result = dict(provided_params or {})
+        for param_name, param_def in skill["input_params"].items():
+            if param_name in result:
+                continue
+            if "default" in param_def:
+                result[param_name] = param_def["default"]
+        return result
 
 
 # 全局单例
