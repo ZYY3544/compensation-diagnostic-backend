@@ -180,15 +180,13 @@ def get_diagnosis_summary(session_id):
                 'interview_notes': str(interview_notes)[:2000],
             }, ensure_ascii=False)},
         ]
-        response = agent.call_llm(messages)
-
-        if '```json' in response:
-            response = response.split('```json')[1].split('```')[0]
-        elif '```' in response:
-            response = response.split('```')[1].split('```')[0]
-
-        result = json.loads(response.strip())
-        return jsonify(result)
+        text = agent.call_llm(messages).strip()
+        # prompt 要求纯文本输出（含第一段 + "建议诊断重点关注：" + 编号列表）
+        # 这里把 AI 输出整体作为 opening 显示；findings 用代码生成的 key_findings
+        return jsonify({
+            'opening': text,
+            'findings': report.get('key_findings', []),
+        })
 
     except Exception as e:
         print(f'[Report] AI summary failed: {e}')
