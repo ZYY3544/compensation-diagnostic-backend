@@ -9,15 +9,19 @@ Skill Registry
 
 import importlib
 import os
-import re
 from typing import Optional
 from .schema import validate_skill
 
 
 class SkillRegistry:
+    """
+    意图识别从关键词正则匹配切换到了全量 AI 分类；
+    skill 文件里的 `triggers` 字段保留作为人类阅读的文档，
+    运行时不再编译成正则、不再参与匹配。
+    """
+
     def __init__(self):
         self._skills = {}       # key -> skill dict
-        self._keyword_rules = []  # [(compiled_pattern, skill_key), ...]
 
     def register(self, skill: dict) -> None:
         """注册一个 skill，校验后加入注册表"""
@@ -26,10 +30,6 @@ class SkillRegistry:
         if key in self._skills:
             raise ValueError(f"Skill key 重复: {key}")
         self._skills[key] = skill
-
-        # 编译关键词规则
-        for pattern in skill["triggers"]:
-            self._keyword_rules.append((re.compile(pattern, re.IGNORECASE), key))
 
     def get(self, key: str) -> Optional[dict]:
         """按 key 获取 skill 定义"""
@@ -42,13 +42,6 @@ class SkillRegistry:
     def list_chips(self) -> list:
         """列出所有有 chip_label 的 skill（用于首屏展示）"""
         return [s for s in self._skills.values() if s.get("chip_label")]
-
-    def match_by_keyword(self, user_message: str) -> Optional[str]:
-        """用关键词规则匹配意图，返回 skill key 或 None"""
-        for pattern, key in self._keyword_rules:
-            if pattern.search(user_message):
-                return key
-        return None
 
     def check_preconditions(self, skill_key: str, context: dict) -> list:
         """
@@ -116,8 +109,23 @@ def auto_discover():
             try:
                 module = importlib.import_module(f".{module_name}", package=__package__)
                 if hasattr(module, "SKILL"):
-                    _registry.register(module.SKILL)
-                    print(f"[SkillRegistry] Registered: {module.SKILL['key']}")
+                    # 从模块 docstring 抽一句话作为 AI 意图识别的 description：
+                    # - 按空行分段，跳过 "Skill: xxx" 标题段
+                    # - 取第一段说明，合并成单行
+                    skill = module.SKILL
+                    if "description" not in skill and module.__doc__:
+                        paragraphs = [p.strip() for p in module.__doc__.strip().split("\n\n") if p.strip()]
+                        desc = ""
+                        for p in paragraphs:
+                            first_line = p.split("\n", 1)[0].strip().lower()
+                            if first_line.startswith(("skill:", "skill ")):
+                                continue
+                            desc = " ".join(l.strip() for l in p.split("\n") if l.strip())
+                            break
+                        if desc:
+                            skill["description"] = desc
+                    _registry.register(skill)
+                    print(f"[SkillRegistry] Registered: {skill['key']}")
                 else:
                     print(f"[SkillRegistry] Skipped {filename}: no SKILL export")
             except Exception as e:

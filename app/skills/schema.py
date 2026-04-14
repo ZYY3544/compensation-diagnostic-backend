@@ -20,6 +20,7 @@ REQUIRED_FIELDS = {
 OPTIONAL_FIELDS = {
     "chip_label": str,       # 首屏 chip 文案，None 表示不在首屏展示
     "output_schema": dict,   # 输出结构示例（文档用途，不做运行时校验）
+    "description": str,      # 给 AI 意图识别看的一句话说明；未显式填会自动从 module docstring 抽
 }
 
 VALID_MODES = {"light", "heavy"}
