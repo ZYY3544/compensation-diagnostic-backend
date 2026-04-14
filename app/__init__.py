@@ -1,15 +1,34 @@
 import os
-from flask import Flask
+from flask import Flask, request
 from flask_cors import CORS
+
+# 允许访问的前端 origin 白名单；带 * 作兜底（开发期），部署正式可收紧。
+ALLOWED_ORIGINS = {
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'https://compensation-diagnostic-frontend.onrender.com',
+}
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object('app.config.Config')
 
-    CORS(app, origins=[
-        'http://localhost:5173',
-        'https://compensation-diagnostic-frontend.onrender.com',
-    ])
+    # flask-cors 管正常响应的 CORS 头
+    CORS(app, resources={r'/api/*': {'origins': list(ALLOWED_ORIGINS)}},
+         supports_credentials=False, max_age=3600)
+
+    # 兜底：Werkzeug 在异常/500 等场景可能绕过 flask-cors 中间件，
+    # 用 after_request 手动保证所有响应都带 CORS 头，否则浏览器会误报
+    # "No Access-Control-Allow-Origin header"，掩盖真正的后端错误
+    @app.after_request
+    def ensure_cors_headers(response):
+        origin = request.headers.get('Origin')
+        if origin and origin in ALLOWED_ORIGINS:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+            response.headers['Vary'] = 'Origin'
+        return response
 
     # Register blueprints
     from app.api.sessions import sessions_bp
