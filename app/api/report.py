@@ -35,23 +35,17 @@ def run_analysis(session_id):
     if not employees:
         return jsonify({'error': 'No employee data'}), 400
 
-    sheet2_summary = None
-    if session.get('parse_result'):
-        sheet2_summary = session['parse_result'].get('sheet2_summary')
-
     # ==============================
-    # Phase 1: 跑 5 个计算引擎
+    # 从 full_analysis 缓存读取（数据变化会自动失效重算）
     # ==============================
-    from app.engine import (
-        external_competitiveness, internal_equity,
-        pay_performance, fix_variable_ratio, labor_cost,
-    )
+    from app.services.full_analysis import get_or_compute
+    full = get_or_compute(session)
 
-    ext_comp = external_competitiveness.analyze(employees, lookup_market_salary)
-    int_equity = internal_equity.analyze(employees)
-    pay_perf = pay_performance.analyze(employees)
-    fix_var = fix_variable_ratio.analyze(employees)
-    lab_cost = labor_cost.analyze(employees, sheet2_summary=sheet2_summary)
+    ext_comp = full['external_competitiveness']
+    int_equity = full['internal_equity']
+    pay_perf = full['pay_performance']
+    fix_var = full['fix_variable_ratio']
+    lab_cost = full['labor_cost']
 
     # ==============================
     # 健康分（基于各模块 status 综合打分）
