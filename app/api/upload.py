@@ -1,11 +1,41 @@
-from flask import Blueprint, jsonify, request, current_app
+"""
+上传流水线分叉：
+  Path A（模板上传）：表头 / 关键词能覆盖所有必填字段 → 直接跑完整 pipeline，前端进数据确认
+  Path B（自由上传）：覆盖不全 → 返回 mapping_needed:true + AI 字段识别建议
+                       前端展示字段映射确认面板，用户确认后调 /confirm-mapping 跑 pipeline
+
+静态模板：static/薪酬诊断数据收集模板.xlsx
+"""
+from flask import Blueprint, jsonify, request, current_app, send_file
 import os
 
 upload_bp = Blueprint('upload', __name__)
 
+
+@upload_bp.route('/template', methods=['GET'])
+def download_template():
+    """下载标准模板 xlsx"""
+    # static 目录挂在 app 根目录平级
+    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    template_path = os.path.join(repo_root, 'static', '薪酬诊断数据收集模板.xlsx')
+    if not os.path.exists(template_path):
+        return jsonify({'error': 'Template not found'}), 404
+    return send_file(
+        template_path,
+        as_attachment=True,
+        download_name='薪酬诊断数据收集模板.xlsx',
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    )
+
+
 @upload_bp.route('/<session_id>', methods=['POST'])
 def upload_file(session_id):
-    """Upload Excel file for a session"""
+    """
+    上传 Excel。
+    先解析表头，判断是否和模板列名对得上：
+      - 对得上 → 直接跑完整 pipeline，返回 ParseResult（前端进数据确认）
+      - 对不上 → 返回 mapping_needed:true + AI 字段映射建议（前端进字段映射确认页）
+    """
     from app.api.sessions import sessions_store
 
     session = sessions_store.get(session_id)
@@ -19,7 +49,7 @@ def upload_file(session_id):
     if not file.filename.endswith(('.xlsx', '.xls', '.csv')):
         return jsonify({'error': 'Unsupported file format'}), 400
 
-    # Save file
+    # 存文件
     upload_dir = current_app.config['UPLOAD_DIR']
     os.makedirs(upload_dir, exist_ok=True)
     file_path = os.path.join(upload_dir, f'{session_id}_{file.filename}')
@@ -28,291 +58,104 @@ def upload_file(session_id):
     session['status'] = 'uploading'
     session['upload_file_path'] = file_path
 
+    # 快速看一眼表头：够不够用
+    from app.services.pipeline import (
+        has_all_required_from_template, parse_headers_and_samples, run_upload_pipeline,
+    )
     try:
-        # Run full pipeline: parse → code checks → AI cleansing → grade match → func match
-        from app.services.pipeline import run_upload_pipeline
-        result = run_upload_pipeline(file_path, session)
+        parsed_preview = parse_headers_and_samples(file_path)
+    except Exception as e:
+        return jsonify({'error': f'Excel 解析失败：{e}'}), 400
+
+    columns = parsed_preview['columns']
+    samples = parsed_preview['sample_rows']
+    template_ok, keyword_field_map = has_all_required_from_template(columns)
+    print(f'[Upload] {session_id} columns={columns} template_ok={template_ok}')
+
+    # -------------------- Path A：模板上传 --------------------
+    if template_ok:
+        try:
+            result = run_upload_pipeline(file_path, session)
+            session['status'] = 'parsed'
+            session['employee_count'] = result['employee_count']
+            session['parse_result'] = result
+            session['cleaned_employees'] = result.get('_employees', [])
+            return jsonify({**result, 'mapping_needed': False}), 200
+        except Exception as e:
+            import traceback
+            print(f'[Upload] Pipeline failed: {e}')
+            traceback.print_exc()
+            return jsonify({'error': f'解析失败：{e}'}), 500
+
+    # -------------------- Path B：自由上传，触发 AI 字段映射 --------------------
+    from app.services.ai_field_matcher import suggest_field_mapping
+    from app.services.standard_fields import STANDARD_FIELDS
+    suggestion = suggest_field_mapping(columns, samples)
+
+    # 缓存到 session：用户确认映射后还要用
+    session['_upload_columns'] = columns
+    session['_upload_samples'] = samples
+    session['_upload_keyword_field_map'] = keyword_field_map  # 备用
+
+    return jsonify({
+        'mapping_needed': True,
+        'columns': columns,
+        'sample_rows': [r['data'] if isinstance(r, dict) and 'data' in r else r for r in samples[:5]],
+        'suggestion': suggestion,              # AI 映射建议
+        'standard_fields': STANDARD_FIELDS,    # 给前端下拉框用
+    }), 200
+
+
+@upload_bp.route('/<session_id>/confirm-mapping', methods=['POST'])
+def confirm_mapping(session_id):
+    """
+    Path B 的第二步：用户在字段映射面板确认后调这个。
+    请求体：{ 'mappings': [{'user_column': '姓名', 'system_field': 'employee_id'}, ...] }
+    把 standard_key → user_column 的映射转成 pipeline 熟悉的 old-key → user_column 格式，
+    然后跑完整 pipeline 返回 ParseResult。
+    """
+    from app.api.sessions import sessions_store
+    from app.services.standard_fields import PIPELINE_KEY_ALIAS
+    from app.services.pipeline import run_upload_pipeline
+
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'Session not found'}), 404
+
+    file_path = session.get('upload_file_path')
+    if not file_path or not os.path.exists(file_path):
+        return jsonify({'error': '上传文件已过期，请重新上传'}), 400
+
+    data = request.json or {}
+    mappings = data.get('mappings') or []
+
+    # 转成 pipeline 使用的 field_map: {pipeline_key: user_column_name}
+    field_map_override: dict = {}
+    for m in mappings:
+        std_key = m.get('system_field')
+        user_col = m.get('user_column')
+        if not std_key or not user_col:
+            continue
+        pipeline_key = PIPELINE_KEY_ALIAS.get(std_key)
+        if not pipeline_key:
+            continue
+        field_map_override[pipeline_key] = user_col
+
+    print(f'[Upload] {session_id} confirm-mapping field_map={field_map_override}')
+
+    try:
+        result = run_upload_pipeline(file_path, session, field_map_override=field_map_override)
         session['status'] = 'parsed'
         session['employee_count'] = result['employee_count']
         session['parse_result'] = result
         session['cleaned_employees'] = result.get('_employees', [])
-        return jsonify(result), 200
+        # 清掉临时缓存
+        session.pop('_upload_columns', None)
+        session.pop('_upload_samples', None)
+        session.pop('_upload_keyword_field_map', None)
+        return jsonify({**result, 'mapping_needed': False}), 200
     except Exception as e:
-        # Fallback to mock if pipeline fails
         import traceback
-        print(f'Pipeline failed: {e}, using mock data')
+        print(f'[Upload] Pipeline after mapping failed: {e}')
         traceback.print_exc()
-        mock_result = get_mock_parse_result()
-        session['status'] = 'parsed'
-        session['employee_count'] = mock_result['employee_count']
-        session['parse_result'] = mock_result
-        from app.api.report import get_mock_employees
-        session['cleaned_employees'] = get_mock_employees()
-        return jsonify(mock_result), 200
-
-
-def parse_uploaded_file(file_path):
-    """Parse the uploaded Excel and return structured result for frontend"""
-    from app.services.excel_parser import parse_excel
-
-    parsed = parse_excel(file_path)
-    rows = parsed.get('sheet1_data', [])
-    columns = parsed.get('column_names', [])
-    sheet2 = parsed.get('sheet2_data', {})
-
-    # Detect fields
-    field_map = detect_fields(columns)
-
-    # Extract unique values
-    grades = set()
-    departments = set()
-    employees_for_analysis = []
-
-    for row in rows:
-        d = row['data']
-        grade = get_mapped_value(d, field_map, 'grade')
-        dept = get_mapped_value(d, field_map, 'department')
-        if grade:
-            grades.add(str(grade))
-        if dept:
-            departments.add(str(dept))
-
-        # Build employee dict for analysis
-        base = safe_float(get_mapped_value(d, field_map, 'base_salary'))
-        bonus = safe_float(get_mapped_value(d, field_map, 'bonus'))
-        emp = {
-            'id': get_mapped_value(d, field_map, 'employee_id') or f'ROW{row["row_number"]}',
-            'job_title': get_mapped_value(d, field_map, 'job_title') or '',
-            'grade': str(grade) if grade else '',
-            'department': str(dept) if dept else '',
-            'base_monthly': base,
-            'annual_bonus': bonus,
-            'performance': get_mapped_value(d, field_map, 'performance') or '',
-            'hire_date': str(get_mapped_value(d, field_map, 'hire_date') or ''),
-            'manager': get_mapped_value(d, field_map, 'manager') or '',
-        }
-        employees_for_analysis.append(emp)
-
-    grades_list = sorted(grades)
-    depts_list = sorted(departments)
-
-    # Detect completeness issues
-    row_missing = []
-    required_fields = ['job_title', 'grade', 'base_salary', 'bonus']
-    for row in rows:
-        d = row['data']
-        for req in required_fields:
-            val = get_mapped_value(d, field_map, req)
-            if val is None or str(val).strip() == '':
-                field_label = {'job_title': '岗位名称', 'grade': '职级', 'base_salary': '月薪', 'bonus': '年终奖'}.get(req, req)
-                row_missing.append({'row': row['row_number'], 'field': field_label, 'issue': f'{field_label}为空'})
-
-    # Check for missing optional columns
-    column_missing = []
-    optional_checks = [
-        ('management_track', '管理岗/专业岗', '管理溢价分析不可用'),
-        ('key_position', '是否关键岗位', '关键岗位下钻不可用'),
-        ('management_complexity', '管理复杂度', '管理复杂度定价不可用'),
-    ]
-    for field_key, field_name, impact in optional_checks:
-        if field_key not in field_map:
-            column_missing.append({'field': field_name, 'impact': impact})
-
-    # Build cleansing corrections (basic detection)
-    corrections = []
-    corr_id = 0
-
-    # Check for potential annualization needs
-    for emp in employees_for_analysis:
-        hire = emp.get('hire_date', '')
-        bonus = emp.get('annual_bonus', 0)
-        if hire and '2025' in str(hire) and bonus and bonus > 0:
-            # Rough check: hired in 2025, might need annualization
-            corr_id += 1
-            corrections.append({
-                'id': corr_id,
-                'description': f'员工 {emp["id"]} 入司时间较近（{hire}），年终奖可能需要年化',
-                'type': 'annualize_bonus'
-            })
-            if len(corrections) >= 5:
-                break
-
-    # Build grade matching (auto-detect)
-    grade_matching = []
-    for g in grades_list:
-        grade_matching.append({
-            'client_grade': g,
-            'standard_grade': None,
-            'confidence': 'low',
-            'confirmed': False,
-        })
-
-    # Build function matching (from job titles)
-    seen_titles = set()
-    function_matching = []
-    for emp in employees_for_analysis:
-        title = emp.get('job_title', '')
-        if title and title not in seen_titles:
-            seen_titles.add(title)
-            function_matching.append({
-                'title': title,
-                'matched': None,
-                'confidence': 'low',
-                'confirmed': False,
-            })
-        if len(function_matching) >= 10:
-            break
-
-    # Determine unlocked/locked modules
-    has_performance = 'performance' in field_map
-    has_company_data = len(sheet2) > 0
-    unlocked = ['外部竞争力分析', '内部公平性分析', '薪酬固浮比分析']
-    locked = []
-    if has_performance:
-        unlocked.append('绩效关联分析')
-    else:
-        locked.append({'name': '绩效关联分析', 'reason': '缺少绩效字段'})
-    if has_company_data:
-        unlocked.append('人工成本趋势分析')
-    else:
-        locked.append({'name': '人工成本趋势分析', 'reason': '缺少公司经营数据'})
-
-    fields_detected = []
-    standard_fields = [
-        ('employee_id', '姓名/工号'), ('job_title', '岗位'), ('grade', '职级'),
-        ('base_salary', '月薪'), ('bonus', '年终奖'), ('department', '部门'),
-        ('performance', '绩效'), ('hire_date', '入司时间'),
-    ]
-    for key, label in standard_fields:
-        fields_detected.append({'name': label, 'detected': key in field_map})
-
-    completeness_score = int((1 - len(row_missing) / max(len(rows) * len(required_fields), 1)) * 100)
-
-    result = {
-        'employee_count': len(rows),
-        'grade_count': len(grades_list),
-        'department_count': len(depts_list),
-        'grades': grades_list,
-        'departments': depts_list,
-        'fields_detected': fields_detected,
-        'completeness_issues': {
-            'row_missing': row_missing[:20],  # Cap at 20
-            'column_missing': column_missing,
-        },
-        'cleansing_corrections': corrections,
-        'grade_matching': grade_matching,
-        'function_matching': function_matching,
-        'data_completeness_score': max(0, min(100, completeness_score)),
-        'unlocked_modules': unlocked,
-        'locked_modules': locked,
-        '_employees': employees_for_analysis,  # Internal, for analysis pipeline
-    }
-    return result
-
-
-def detect_fields(columns):
-    """Map column names to standard field names using keyword matching"""
-    field_map = {}
-    patterns = {
-        'employee_id': ['工号', '姓名', '员工'],
-        'job_title': ['岗位', '职位', '头衔'],
-        'grade': ['职级', '级别', '层级', 'level'],
-        'department': ['部门', '一级'],
-        'base_salary': ['月薪', '基本工资', '固定月薪', '月度基本'],
-        'bonus': ['年终奖', '奖金', '年终'],
-        'thirteenth': ['13薪', '十三薪'],
-        'allowance': ['津贴', '补贴', '补助'],
-        'performance': ['绩效', '考核', '评级'],
-        'hire_date': ['入职', '入司', '入职日期'],
-        'manager': ['上级', '汇报', '主管'],
-        'management_track': ['管理岗', '专业岗', '通道'],
-        'key_position': ['关键岗位', '核心岗位'],
-        'management_complexity': ['管理复杂度', '复杂度'],
-        'city': ['城市', 'base'],
-        'age': ['年龄'],
-        'education': ['学历', '教育'],
-    }
-
-    for col in columns:
-        col_lower = col.lower() if col else ''
-        for field_key, keywords in patterns.items():
-            if field_key not in field_map:
-                for kw in keywords:
-                    if kw.lower() in col_lower:
-                        field_map[field_key] = col
-                        break
-
-    return field_map
-
-
-def get_mapped_value(row_data, field_map, field_key):
-    """Get value from row using field mapping"""
-    col_name = field_map.get(field_key)
-    if col_name and col_name in row_data:
-        return row_data[col_name]
-    return None
-
-
-def safe_float(val):
-    """Safely convert to float"""
-    if val is None:
-        return 0
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return 0
-
-
-def get_mock_parse_result():
-    """Mock Excel parsing result (fallback)"""
-    return {
-        'employee_count': 126,
-        'grade_count': 6,
-        'department_count': 5,
-        'grades': ['L3', 'L4', 'L5', 'L6', 'L7', 'L8'],
-        'departments': ['研发', '销售', '市场', '人力资源', '行政'],
-        'fields_detected': [
-            {'name': '姓名', 'detected': True}, {'name': '岗位', 'detected': True},
-            {'name': '职级', 'detected': True}, {'name': '月薪', 'detected': True},
-            {'name': '年终奖', 'detected': True}, {'name': '部门', 'detected': True},
-            {'name': '绩效', 'detected': True}, {'name': '入司时间', 'detected': True},
-        ],
-        'completeness_issues': {
-            'row_missing': [
-                {'row': 15, 'field': '月薪', 'issue': '月薪为空'},
-                {'row': 23, 'field': '职级', 'issue': '职级为空'},
-                {'row': 67, 'field': '岗位名称', 'issue': '岗位名称为空'},
-            ],
-            'column_missing': [
-                {'field': '管理岗/专业岗', 'impact': '管理溢价分析不可用'},
-                {'field': '是否关键岗位', 'impact': '关键岗位下钻不可用'},
-                {'field': '管理复杂度', 'impact': '管理复杂度定价不可用'},
-            ]
-        },
-        'cleansing_corrections': [
-            {'id': 0, 'description': '第 5、12、30 行年终奖已年化处理（入司不满 1 年）', 'type': 'annualize_bonus'},
-            {'id': 1, 'description': '全部员工 13 薪已从年终奖移入固定薪酬', 'type': '13th_month_reclassify'},
-            {'id': 2, 'description': '第 45 行月薪 ¥85,000 已标记为异常值', 'type': 'extreme_value'},
-        ],
-        'grade_matching': [
-            {'client_grade': 'L3', 'standard_grade': '专员级', 'confidence': 'high', 'confirmed': True},
-            {'client_grade': 'L4', 'standard_grade': '高级专员级', 'confidence': 'high', 'confirmed': True},
-            {'client_grade': 'L5', 'standard_grade': '经理级', 'confidence': 'high', 'confirmed': True},
-            {'client_grade': 'L6', 'standard_grade': '高级经理级', 'confidence': 'high', 'confirmed': True},
-            {'client_grade': 'L7', 'standard_grade': None, 'confidence': 'low', 'confirmed': False},
-            {'client_grade': 'L8', 'standard_grade': '总监级', 'confidence': 'high', 'confirmed': True},
-        ],
-        'function_matching': [
-            {'title': '软件工程师', 'matched': '技术研发-软件开发', 'confidence': 'high', 'confirmed': True},
-            {'title': 'HRBP 经理', 'matched': '人力资源-HRBP', 'confidence': 'high', 'confirmed': True},
-            {'title': '增长黑客', 'matched': None, 'confidence': 'low', 'confirmed': False, 'alternatives': ['数字营销', '用户增长']},
-            {'title': '销售总监', 'matched': '销售-大客户销售', 'confidence': 'high', 'confirmed': True},
-            {'title': '财务主管', 'matched': '财务-财务管理', 'confidence': 'high', 'confirmed': True},
-        ],
-        'data_completeness_score': 78,
-        'unlocked_modules': ['外部竞争力分析', '内部公平性分析', '薪酬固浮比分析'],
-        'locked_modules': [
-            {'name': '绩效关联分析', 'reason': '缺少绩效字段'},
-            {'name': '人工成本趋势分析', 'reason': '缺少公司经营数据'},
-        ],
-    }
+        return jsonify({'error': f'映射确认后解析失败：{e}'}), 500

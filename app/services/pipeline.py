@@ -10,12 +10,16 @@ from app.agents.cleansing_agent import CleansingAgent
 from app.agents.matching_agent import MatchingAgent
 
 
-def run_upload_pipeline(file_path: str, session: dict) -> dict:
+def run_upload_pipeline(file_path: str, session: dict, field_map_override: dict | None = None) -> dict:
     """
     上传阶段流水线（快速，不调 LLM）：
     1. 解析 Excel
     2. 代码层跑 15 条规则检测 + 完整性分析
     返回前端 ParseResult 完整结构（grade/func matching 用占位数据）
+
+    参数 field_map_override：
+    当用户走了"自由上传 + AI 字段映射 + 用户确认"路径后，
+    传入 {standard_key: user_column_name} 的确认映射，跳过关键词自动识别。
     """
     # ------------------------------------------------------------------
     # Step 1: 解析 Excel
@@ -25,7 +29,7 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
     columns = parsed.get('column_names', [])
     sheet2 = parsed.get('sheet2_data', {})
 
-    field_map = _detect_fields(columns)
+    field_map = field_map_override if field_map_override else _detect_fields(columns)
 
     grades = set()
     departments = set()
@@ -174,6 +178,29 @@ def run_upload_pipeline(file_path: str, session: dict) -> dict:
 
 def _has_api_key() -> bool:
     return bool(os.getenv('OPENROUTER_API_KEY', '').strip())
+
+
+def parse_headers_and_samples(file_path: str) -> dict:
+    """
+    仅解析表头 + 前 N 行样本数据，用于 AI 字段映射识别。
+    不做完整 pipeline。
+    """
+    parsed = parse_excel(file_path)
+    rows = parsed.get('sheet1_data', [])[:5]
+    columns = parsed.get('column_names', [])
+    return {'columns': columns, 'sample_rows': rows}
+
+
+def has_all_required_from_template(columns: list) -> tuple[bool, dict]:
+    """
+    判断上传的 Excel 是否和标准模板的列名对得上（关键词匹配覆盖所有必填字段）。
+    返回 (True, field_map) 则走模板路径；(False, partial_field_map) 则走 AI 映射路径。
+    必填字段定义：employee_id / job_title / grade / department / base_salary
+    """
+    fm = _detect_fields(columns)
+    required = ['employee_id', 'job_title', 'grade', 'department', 'base_salary']
+    matched_all = all(k in fm for k in required)
+    return matched_all, fm
 
 
 def _detect_fields(columns: list) -> dict:
