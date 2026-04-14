@@ -140,18 +140,25 @@ def ai_match_grades(grades_list: list) -> dict:
     agent = BaseAgent(temperature=0.2)
 
     level_desc = '\n'.join(f'{k}: {v}' for k, v in STANDARD_LEVEL_DEFINITIONS.items())
-    prompt = f"""请将以下公司职级映射到铭曦标准职级体系。
+    prompt = f"""请将以下公司职级映射到铭曦标准职级体系（Level 1 - Level 7）。
 
 公司职级列表：{json.dumps(grades_list, ensure_ascii=False)}
 
 标准职级体系（从低到高）：
 {level_desc}
 
-输出严格 JSON，格式：{{"L3": "Level 2", "L4": "Level 3", ...}}
+默认映射规则（非常重要）：
+- 纯数字职级体系（L1-L7、P1-P7、T1-T7、M1-M7、G1-G7 等），**默认同数字对应**：L3→Level 3、L5→Level 5、P4→Level 4。这是互联网/科技行业的通用约定，不要擅自降一级。
+- 含岗位语义的职级（如"高级工程师"、"P6 资深"、"总监"、"VP"），结合岗位名称与经验年限判断。
+- 仅当有明确证据表明默认规则不对才偏离；此时输出 low confidence。
+
+输出严格 JSON，格式示例（纯数字体系默认同数字）：
+{{"L1": "Level 1", "L3": "Level 3", "L5": "Level 5", "L7": "Level 7"}}
+
 值必须是 Level 1 到 Level 7 之一。只输出 JSON，不要其他文字。"""
 
     messages = [
-        {"role": "system", "content": "你是薪酬诊断系统的职级匹配模块。根据公司职级名称，推断其对应的标准职级。"},
+        {"role": "system", "content": "你是薪酬诊断系统的职级匹配模块。纯数字职级体系默认同数字对应（L3→Level 3），不要随意降一级。"},
         {"role": "user", "content": prompt},
     ]
     response = agent.call_llm(messages)

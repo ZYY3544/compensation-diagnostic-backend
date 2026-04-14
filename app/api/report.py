@@ -139,61 +139,78 @@ def get_diagnosis_summary(session_id):
             'findings': report.get('key_findings', []),
         })
 
-    try:
+    # 构建紧凑数据摘要（只传关键数字，不传明细）
+    modules = report.get('modules', {})
+    ec = modules.get('external_competitiveness', {})
+    ie = modules.get('internal_equity', {})
+    pp = modules.get('pay_performance', {})
+    fv = modules.get('fix_variable_ratio', {})
+    lc_kpi = modules.get('labor_cost', {}).get('kpi', {})
+
+    summary = {
+        'health_score': report.get('health_score'),
+        # 代码预算出的 findings（已按优先级排序）
+        'code_findings': [
+            {'priority': f.get('priority'), 'text': f.get('text')}
+            for f in report.get('key_findings', [])[:5]
+        ],
+        'external_cr': ec.get('overall_cr'),
+        'external_below_p25': ec.get('total_below_p25'),
+        # 只保留有信号的职能（CR 偏离 0.85-1.15 正常区间的）
+        'external_fn_signals': [
+            {'name': f.get('name'), 'cr': f.get('cr'), 'n': f.get('count')}
+            for f in ec.get('cr_by_function', [])
+            if f.get('cr') is not None and (f['cr'] < 0.85 or f['cr'] > 1.15)
+        ][:5],
+        'equity_high_dispersion_grades': [
+            d['grade'] for d in ie.get('dispersion', []) if d.get('status') == 'high'
+        ],
+        'performance_a_vs_b_gap_pct': pp.get('a_vs_b_gap_pct'),
+        'performance_spread_adequate': pp.get('spread_adequate'),
+        'fix_pct': fv.get('overall_fix_pct'),
+        'labor_cost_per_head': lc_kpi.get('per_head_cost'),
+    }
+    user_content = json.dumps({
+        'analysis_summary': summary,
+        'interview_notes': (str(interview_notes) if interview_notes else '')[:1500],
+    }, ensure_ascii=False)
+
+    def _call_ai():
         from app.agents.base_agent import BaseAgent
         agent = BaseAgent(temperature=0.5)
         system_prompt = agent.load_prompt('diagnosis_summary.txt')
-
-        # 构建摘要输入
-        modules = report.get('modules', {})
-        summary = {
-            'health_score': report.get('health_score'),
-            'key_findings_from_code': report.get('key_findings', []),
-            'external_competitiveness': {
-                'overall_cr': modules.get('external_competitiveness', {}).get('overall_cr'),
-                'below_p25': modules.get('external_competitiveness', {}).get('total_below_p25'),
-                'cr_by_function': modules.get('external_competitiveness', {}).get('cr_by_function', [])[:5],
-            },
-            'internal_equity': {
-                'high_dispersion': modules.get('internal_equity', {}).get('high_dispersion_count'),
-                'dispersion_summary': [
-                    {'grade': d['grade'], 'coeff': d['coefficient'], 'status': d['status']}
-                    for d in modules.get('internal_equity', {}).get('dispersion', [])[:5]
-                ],
-            },
-            'pay_performance': {
-                'a_vs_b_gap': modules.get('pay_performance', {}).get('a_vs_b_gap_pct'),
-                'spread_adequate': modules.get('pay_performance', {}).get('spread_adequate'),
-            },
-            'fix_variable': {
-                'overall_fix_pct': modules.get('fix_variable_ratio', {}).get('overall_fix_pct'),
-            },
-            'labor_cost': {
-                'kpi': modules.get('labor_cost', {}).get('kpi', {}),
-            },
-        }
-
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps({
-                'analysis_summary': summary,
-                'interview_notes': str(interview_notes)[:2000],
-            }, ensure_ascii=False)},
+            {"role": "user", "content": user_content},
         ]
-        text = agent.call_llm(messages).strip()
-        # prompt 要求纯文本输出（含第一段 + "建议诊断重点关注：" + 编号列表）
-        # 这里把 AI 输出整体作为 opening 显示；findings 用代码生成的 key_findings
+        return agent.call_llm(messages).strip()
+
+    # 单次重试：第一次失败等 2s 重试，再失败走 fallback
+    text = None
+    last_err = None
+    import time
+    for attempt in (1, 2):
+        try:
+            text = _call_ai()
+            if text:
+                break
+        except Exception as e:
+            last_err = e
+            print(f'[Report] AI summary attempt {attempt} failed: {e}')
+            if attempt == 1:
+                time.sleep(2)
+
+    if text:
         return jsonify({
             'opening': text,
             'findings': report.get('key_findings', []),
         })
 
-    except Exception as e:
-        print(f'[Report] AI summary failed: {e}')
-        return jsonify({
-            'opening': '诊断报告已生成，请查看右侧各模块详情。',
-            'findings': report.get('key_findings', []),
-        })
+    print(f'[Report] AI summary final fallback (last err: {last_err})')
+    return jsonify({
+        'opening': '诊断报告已生成，请查看右侧各模块详情。',
+        'findings': report.get('key_findings', []),
+    })
 
 
 @report_bp.route('/<session_id>/module-insight', methods=['POST'])
@@ -218,30 +235,51 @@ def get_module_insight(session_id):
     if not os.getenv('OPENROUTER_API_KEY', '').strip():
         return jsonify({'insight': ''})
 
-    try:
+    # 精简模块数据（去掉大列表，只保留统计数字）
+    slim_data = {k: v for k, v in module_data.items()
+                 if k not in ('cr_heatmap', 'deviation_matrix', 'boxplot', 'below_p25_detail', 'trend')}
+    user_content = json.dumps({
+        'module': module_key,
+        'module_data': slim_data,
+        'diagnosis_summary': report.get('key_findings', [])[:3],
+        'interview_notes': str(interview_notes)[:1000],
+    }, ensure_ascii=False)
+
+    def _call_ai():
         from app.agents.base_agent import BaseAgent
         agent = BaseAgent(temperature=0.5)
         system_prompt = agent.load_prompt('module_insight.txt')
-
-        # 精简模块数据（去掉大列表，只保留统计数字）
-        slim_data = {k: v for k, v in module_data.items()
-                     if k not in ('cr_heatmap', 'deviation_matrix', 'boxplot', 'below_p25_detail', 'trend')}
-
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps({
-                'module': module_key,
-                'module_data': slim_data,
-                'diagnosis_summary': report.get('key_findings', [])[:3],
-                'interview_notes': str(interview_notes)[:1000],
-            }, ensure_ascii=False)},
+            {"role": "user", "content": user_content},
         ]
-        insight = agent.call_llm(messages).strip()
+        return agent.call_llm(messages).strip()
+
+    # 单次重试：第一次失败等 2s 重试一次，还失败走 fallback
+    import time
+    insight = ''
+    last_err = None
+    for attempt in (1, 2):
+        try:
+            insight = _call_ai()
+            if insight:
+                break
+        except Exception as e:
+            last_err = e
+            print(f'[Report] AI insight {module_key} attempt {attempt} failed: {e}')
+            if attempt == 1:
+                time.sleep(2)
+
+    if insight:
         return jsonify({'insight': insight})
 
-    except Exception as e:
-        print(f'[Report] AI insight failed for {module_key}: {e}')
-        return jsonify({'insight': ''})
+    # fallback：基于 code findings 拼一句兜底文案，不是空白
+    print(f'[Report] AI insight {module_key} final fallback (last err: {last_err})')
+    mod_findings = [f for f in report.get('key_findings', []) if f.get('module') == module_key]
+    if mod_findings:
+        fallback = '；'.join(f['text'] for f in mod_findings[:2])
+        return jsonify({'insight': f'该模块关键发现：{fallback}。详细解读暂时无法生成，请稍后重试或查看右侧图表。'})
+    return jsonify({'insight': '详细解读暂时无法生成，请稍后重试或查看右侧图表。'})
 
 
 @report_bp.route('/<session_id>/diagnosis-advice', methods=['POST'])
