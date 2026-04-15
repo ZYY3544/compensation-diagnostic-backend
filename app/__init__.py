@@ -30,6 +30,17 @@ def create_app():
             response.headers['Vary'] = 'Origin'
         return response
 
+    # session 写回合并：每个请求结束统一 flush 一次脏 session，
+    # 避免 analyze 这种多次 setitem 的接口把整份 session 反复序列化、撑爆 512MB
+    @app.after_request
+    def flush_dirty_sessions(response):
+        try:
+            from app.api.sessions import sessions_store
+            sessions_store.flush_all_dirty()
+        except Exception as e:
+            print(f'[after_request] session flush failed: {e}')
+        return response
+
     # Register blueprints
     from app.api.sessions import sessions_bp
     from app.api.upload import upload_bp
