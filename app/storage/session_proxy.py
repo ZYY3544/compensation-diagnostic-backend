@@ -10,13 +10,14 @@ from typing import Optional
 from app.storage import get_storage
 
 
-# 不写回 storage 的 key —— 都是体积大、可由 cleaned_employees 重算的临时缓存
+# 不写回 sessions_legacy 的 key —— 体积大且有更合适的存储位置，避免每次 flush 都重复序列化
 EPHEMERAL_KEYS = {
-    '_full_analysis',
+    '_full_analysis',          # 可由 cleaned_employees 重算
     '_full_analysis_at',
     '_full_analysis_version',
-    '_code_results',
-    '_employees_original',  # 仅 revert UI 用，重启后丢失可接受（重新 upload）
+    '_code_results',           # 仅 cleansing 阶段需要，post-cleansing 没有读者
+    '_employees_original',     # 仅 revert UI 用，重启后丢失可接受
+    'analysis_results',        # 已通过 _persist_snapshot 落到 data_snapshots，downstream 从那里读
 }
 
 

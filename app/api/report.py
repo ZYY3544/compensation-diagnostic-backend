@@ -13,10 +13,11 @@ report_bp = Blueprint('report', __name__)
 @report_bp.route('/<session_id>', methods=['GET'])
 def get_report(session_id):
     from app.api.sessions import sessions_store
+    from app.services.snapshot_loader import load_analysis_results
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
-    report = session.get('analysis_results')
+    report = load_analysis_results(session_id, session)
     if not report:
         return jsonify({'error': 'Analysis not complete'}), 400
     return jsonify(report)
@@ -25,13 +26,15 @@ def get_report(session_id):
 @report_bp.route('/<session_id>/analyze', methods=['POST'])
 def run_analysis(session_id):
     from app.api.sessions import sessions_store
+    from app.services.snapshot_loader import load_cleaned_employees
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
 
     session['status'] = 'analyzing'
 
-    employees = session.get('cleaned_employees') or session.get('_employees', [])
+    # 优先 DB（重跑 analyze 时不依赖 in-memory），fallback 到 session
+    employees = load_cleaned_employees(session_id, session)
     if not employees:
         return jsonify({'error': 'No employee data'}), 400
 
@@ -82,7 +85,11 @@ def run_analysis(session_id):
 
 
 def _persist_snapshot(snapshot_id, session, full_analysis, report):
-    """把 session 的关键数据同步到 DataSnapshot"""
+    """把 session 的关键数据同步到 DataSnapshot。
+    analysis_results 也写入 —— 让 downstream 接口（diagnosis-summary 等）能从 DB 读，
+    不依赖 in-memory session。
+    employees_original 和 code_results 不再写入：前者可由 mutations.old_value 重建，
+    后者仅 cleansing 阶段需要，post-cleansing 没有读者。"""
     try:
         from app.storage import get_storage
         from datetime import datetime
@@ -93,14 +100,13 @@ def _persist_snapshot(snapshot_id, session, full_analysis, report):
             'snapshot_id': snapshot_id,
             'status': 'analyzed',
             'cleaned_employees': session.get('cleaned_employees') or session.get('_employees', []),
-            'employees_original': session.get('_employees_original', []),
             'interview_notes': session.get('interview_notes'),
             'parse_result': session.get('parse_result'),
             'grade_mapping': session.get('_grade_match_result'),
             'func_mapping': session.get('_func_match_result'),
             'full_analysis_json': full_analysis,
+            'analysis_results': report,
             'analyzed_at': datetime.utcnow().isoformat(),
-            'code_results': session.get('_code_results'),
             'field_map': session.get('_field_map'),
             'column_names': session.get('_column_names'),
             'grades_list': session.get('_grades_list'),
@@ -122,15 +128,17 @@ def _persist_snapshot(snapshot_id, session, full_analysis, report):
 def get_diagnosis_summary(session_id):
     """AI 生成诊断摘要（opening + findings）"""
     from app.api.sessions import sessions_store
+    from app.services.snapshot_loader import load_analysis_results, load_interview_notes
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
 
-    report = session.get('analysis_results')
+    # 优先从 data_snapshots 读，session 仅作 fallback——避免内存里长期持有大块数据
+    report = load_analysis_results(session_id, session)
     if not report:
         return jsonify({'error': 'Analysis not complete'}), 400
 
-    interview_notes = session.get('interview_notes', {})
+    interview_notes = load_interview_notes(session_id, session)
 
     import os, json
     if not os.getenv('OPENROUTER_API_KEY', '').strip():
@@ -218,18 +226,19 @@ def get_module_insight(session_id):
     """AI 生成单个模块的解读"""
     from flask import request
     from app.api.sessions import sessions_store
+    from app.services.snapshot_loader import load_analysis_results, load_interview_notes
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
 
-    report = session.get('analysis_results')
+    report = load_analysis_results(session_id, session)
     if not report:
         return jsonify({'error': 'Analysis not complete'}), 400
 
     data = request.json or {}
     module_key = data.get('module', '')
     module_data = report.get('modules', {}).get(module_key, {})
-    interview_notes = session.get('interview_notes', {})
+    interview_notes = load_interview_notes(session_id, session)
 
     import os, json
     if not os.getenv('OPENROUTER_API_KEY', '').strip():
@@ -286,15 +295,16 @@ def get_module_insight(session_id):
 def get_diagnosis_advice(session_id):
     """AI 生成诊断建议"""
     from app.api.sessions import sessions_store
+    from app.services.snapshot_loader import load_analysis_results, load_interview_notes
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
 
-    report = session.get('analysis_results')
+    report = load_analysis_results(session_id, session)
     if not report:
         return jsonify({'error': 'Analysis not complete'}), 400
 
-    interview_notes = session.get('interview_notes', {})
+    interview_notes = load_interview_notes(session_id, session)
 
     import os, json
     if not os.getenv('OPENROUTER_API_KEY', '').strip():
@@ -468,11 +478,12 @@ def _generate_key_findings(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
 def export_pdf(session_id):
     """导出诊断报告 PDF"""
     from app.api.sessions import sessions_store
+    from app.services.snapshot_loader import load_analysis_results
     session = sessions_store.get(session_id)
     if not session:
         return jsonify({'error': 'Session not found'}), 404
 
-    report = session.get('analysis_results')
+    report = load_analysis_results(session_id, session)
     if not report:
         return jsonify({'error': 'Analysis not complete'}), 400
 
