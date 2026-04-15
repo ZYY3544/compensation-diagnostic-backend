@@ -12,7 +12,10 @@ def _get_static_path(filename):
 
 
 def get_market_data():
-    """加载市场薪酬数据，返回按 (job_function, hay_grade) 索引的字典"""
+    """加载市场薪酬数据，返回按 (job_function, hay_grade) 索引的字典。
+    用 iter_rows 单遍流式读取——之前 ws.cell(r,c) 在 read_only 模式下每次都从头
+    迭代 worksheet，O(N²×M) 复杂度，5000 行 × 20 列要 30s+ 直接把 gunicorn 撑超时。
+    """
     if 'market_index' in _cache:
         return _cache['market_index']
 
@@ -21,16 +24,24 @@ def get_market_data():
         _cache['market_index'] = {}
         return {}
 
+    import time
+    t0 = time.monotonic()
+
     wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
     ws = wb.active
 
-    headers = [ws.cell(row=1, column=c).value for c in range(1, ws.max_column + 1)]
+    rows_iter = ws.iter_rows(values_only=True)
+    try:
+        first = next(rows_iter)
+    except StopIteration:
+        wb.close()
+        _cache['market_index'] = {}
+        return {}
+    headers = [str(h).strip() if h is not None else '' for h in first]
+
     index = {}
-    for r in range(2, ws.max_row + 1):
-        row = {}
-        for c, h in enumerate(headers, 1):
-            if h:
-                row[h.strip()] = ws.cell(row=r, column=c).value
+    for row_values in rows_iter:
+        row = {h: v for h, v in zip(headers, row_values) if h}
 
         job_func = str(row.get('Job Function', '')).strip()
         hay = row.get('Hay职级')
@@ -56,6 +67,7 @@ def get_market_data():
 
     wb.close()
     _cache['market_index'] = index
+    print(f'[market_data] loaded {len(index)} rows in {time.monotonic() - t0:.2f}s')
     return index
 
 

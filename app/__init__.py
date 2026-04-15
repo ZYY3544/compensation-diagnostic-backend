@@ -60,6 +60,14 @@ def create_app():
     def health():
         return {'status': 'ok'}
 
+    # 启动时预热市场薪酬数据缓存 —— 把成本从 /analyze 的请求路径挪到 worker boot
+    # 即使加载慢也只影响 boot，不会触发 gunicorn 30s 请求超时
+    try:
+        from app.services.market_data import get_market_data
+        get_market_data()
+    except Exception as e:
+        print(f'[startup] market_data preload failed: {e}')
+
     return app
 
 app = create_app()
