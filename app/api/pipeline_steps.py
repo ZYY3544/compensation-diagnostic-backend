@@ -115,13 +115,19 @@ def run_cleansing(session_id):
         auto = [m for m in mutations if m.get('auto_applied')]
         apply_mutations(employees, auto, field_map)
 
-        # Step 4: 生成标注 Excel
+        # Step 4: 生成标注 Excel —— 完全从 parse_result 重建，不读用户原 xlsx
+        # 避开 openpyxl 在用户文件里碰到 vml drawing 时崩溃的路径
         cleansed_path = None
+        parse_result = session.get('parse_result')
         upload_path = session.get('upload_file_path')
-        if upload_path and os.path.exists(upload_path):
+        if parse_result and upload_path:
             cleansed_path = upload_path.rsplit('.', 1)[0] + '_cleansed.xlsx'
             from app.services.excel_mutator import create_marked_excel
-            create_marked_excel(upload_path, cleansed_path, mutations, field_map, column_names)
+            try:
+                create_marked_excel(parse_result, mutations, cleansed_path, field_map)
+            except Exception as e:
+                print(f'[Pipeline] marked Excel generation failed: {e}')
+                cleansed_path = None
 
         # 存储
         session['_mutations'] = mutations
@@ -198,11 +204,16 @@ def revert_cleansing(session_id):
     else:
         reapply_mutation(employees, employees_original, mutations, mutation_id)
 
-    # 同步 Excel
+    # 同步 Excel —— 整份重建（mutations 已携带最新的 reverted 状态）
+    # 比"找到对应单元格增量改"更稳，且不依赖之前的 marked Excel 还在磁盘上
+    parse_result = session.get('parse_result')
     excel_path = session.get('_cleansed_excel_path')
-    if excel_path and os.path.exists(excel_path):
-        from app.services.excel_mutator import update_cell_in_excel
-        update_cell_in_excel(excel_path, target, field_map, column_names, is_revert=target['reverted'])
+    if excel_path and parse_result:
+        from app.services.excel_mutator import create_marked_excel
+        try:
+            create_marked_excel(parse_result, mutations, excel_path, field_map)
+        except Exception as e:
+            print(f'[Pipeline] revert Excel update failed: {e}')
 
     session['cleaned_employees'] = employees
 

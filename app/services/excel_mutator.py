@@ -1,5 +1,10 @@
 """
-在 Excel 副本上执行修改 + 标记（黄色底色 + 批注）。
+生成"清洗预览" Excel：完全从 parse_result.sheet1_data + mutations 重建一份全新工作簿，
+**绝不重新打开用户原 Excel**——避开 openpyxl 在用户文件里碰到 vml drawing /
+rich text 时的崩溃路径。
+
+牺牲：丢掉用户原 Excel 的格式、Sheet 2、自定义公式等。换来的是稳定性 + 不用读原文件。
+对"清洗预览"这个用途完全可以接受：用户要看的是哪些单元格被改了，不是要原样备份。
 """
 import openpyxl
 from openpyxl.styles import PatternFill
@@ -27,34 +32,52 @@ def _col_index(field: str, field_map: dict, column_names: list) -> int:
 
 
 def create_marked_excel(
-    source_path: str,
-    output_path: str,
+    parse_result: dict,
     mutations: list,
+    output_path: str,
     field_map: dict,
-    column_names: list,
 ) -> str:
     """
-    复制原始 Excel，对每条 mutation 标记对应单元格。
-    - 已修正（有 new_value）：改值 + 黄色底色 + 批注
-    - 需确认（new_value=None）：不改值 + 浅黄底色 + 批注
-    """
-    wb = openpyxl.load_workbook(source_path)
-    ws = wb.active
+    从 parse_result（含原始 sheet1_data + column_names）重建一份全新 xlsx，
+    在上面叠加 mutation 标记。不读用户原 Excel。
 
+    - reverted=True 的 mutation：跳过（保持原值，不染色）
+    - 已修正（new_value 非空）：写入 new_value + 黄色 + 批注
+    - 需确认（new_value=None）：保留原值 + 浅黄 + 批注
+    """
+    column_names = parse_result.get('column_names', [])
+    sheet1_data = parse_result.get('sheet1_data', [])
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Sheet1'
+
+    # 写表头
+    for c, name in enumerate(column_names, 1):
+        ws.cell(row=1, column=c, value=name)
+
+    # 写数据 —— sheet1_data 的 row_number 是 Excel 行号（2 起），row[i].data 是 {col_name: value}
+    for entry in sheet1_data:
+        row_num = entry.get('row_number')
+        data = entry.get('data', {})
+        if not row_num:
+            continue
+        for c, name in enumerate(column_names, 1):
+            ws.cell(row=row_num, column=c, value=data.get(name))
+
+    # 叠加 mutation 标记
     marked_count = 0
     for m in mutations:
         if m.get('reverted'):
             continue
         col_idx = _col_index(m['field'], field_map, column_names)
         if col_idx < 0:
-            print(f'[ExcelMutator] field "{m["field"]}" not found in field_map, skipping row {m.get("row_number")}')
+            print(f'[ExcelMutator] field "{m["field"]}" not in field_map, skipping row {m.get("row_number")}')
             continue
-        row = m['row_number']
-        cell = ws.cell(row=row, column=col_idx)
+        cell = ws.cell(row=m['row_number'], column=col_idx)
         old_val = cell.value
 
         if m.get('new_value') is not None:
-            # 已修正：改值 + 黄色
             cell.value = m['new_value']
             cell.fill = HIGHLIGHT_FILL
             cell.comment = Comment(
@@ -62,7 +85,6 @@ def create_marked_excel(
                 'Sparky'
             )
         else:
-            # 需确认：不改值 + 浅黄标记
             cell.fill = WARNING_FILL
             cell.comment = Comment(
                 f"Sparky 标记：需确认\n{m.get('description', '')}",
@@ -74,35 +96,3 @@ def create_marked_excel(
     wb.save(output_path)
     wb.close()
     return output_path
-
-
-def update_cell_in_excel(
-    excel_path: str,
-    mutation: dict,
-    field_map: dict,
-    column_names: list,
-    is_revert: bool,
-) -> None:
-    """单条 mutation 的增量更新：撤回恢复原始值 + 灰色，恢复则重新改值 + 黄色。"""
-    col_idx = _col_index(mutation['field'], field_map, column_names)
-    if col_idx < 0:
-        return
-
-    wb = openpyxl.load_workbook(excel_path)
-    ws = wb.active
-    cell = ws.cell(row=mutation['row_number'], column=col_idx)
-
-    if is_revert:
-        cell.value = mutation['old_value']
-        cell.fill = REVERTED_FILL
-        cell.comment = Comment(f"已撤回\n原修正: {mutation.get('description', '')}", 'Sparky')
-    else:
-        cell.value = mutation['new_value']
-        cell.fill = HIGHLIGHT_FILL
-        cell.comment = Comment(
-            f"Sparky 修正\n原始值: {mutation['old_value']}\n{mutation.get('description', '')}",
-            'Sparky'
-        )
-
-    wb.save(excel_path)
-    wb.close()
