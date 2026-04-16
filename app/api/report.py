@@ -70,6 +70,8 @@ def run_analysis(session_id):
             'fix_variable_ratio': fix_var,
             'labor_cost': lab_cost,
         },
+        'grade_trend_tcc': full.get('grade_trend_tcc', {}),
+        'grade_trend_base': full.get('grade_trend_base', {}),
     }
 
     session['status'] = 'report_done'

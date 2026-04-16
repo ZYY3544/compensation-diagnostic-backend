@@ -7,6 +7,7 @@ from app.engine import (
     external_competitiveness, internal_equity,
     pay_performance, fix_variable_ratio, labor_cost,
 )
+from app.engine.grade_trend import compute_grade_trend
 from app.services.market_data import lookup_market_salary
 from app.models import now_iso
 
@@ -22,12 +23,23 @@ def compute_full_analysis(employees: list, sheet2_summary: dict = None) -> dict:
     fv = fix_variable_ratio.analyze(employees)
     lc = labor_cost.analyze(employees, sheet2_summary=sheet2_summary)
 
+    # 职级薪酬趋势：两种口径各算一次，前端按 toggle 切换
+    try:
+        grade_trend_tcc = compute_grade_trend(employees, salary_type='tcc')
+        grade_trend_base = compute_grade_trend(employees, salary_type='base')
+    except Exception as e:
+        print(f'[full_analysis] grade_trend failed: {e}')
+        grade_trend_tcc = {}
+        grade_trend_base = {}
+
     return {
         'external_competitiveness': ext,
         'internal_equity': eq,
         'pay_performance': pp,
         'fix_variable_ratio': fv,
         'labor_cost': lc,
+        'grade_trend_tcc': grade_trend_tcc,
+        'grade_trend_base': grade_trend_base,
         'analyzed_at': now_iso(),
         'employee_count': len([e for e in employees if e.get('base_monthly')]),
     }
