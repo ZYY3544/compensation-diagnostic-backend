@@ -19,14 +19,16 @@ def compute_grade_trend(employees: list, salary_type: str = 'tcc',
     """
     salary_key = 'tcc' if salary_type == 'tcc' else 'base_annual'
 
-    # 按职级分组，收集每个职级的员工薪酬
+    # 按职级分组，收集每个职级的员工薪酬 + 原始员工对象（用于匿名散点）
     grade_salaries: dict[str, list[float]] = defaultdict(list)
+    grade_employees: dict[str, list[dict]] = defaultdict(list)
     for emp in employees:
         grade = str(emp.get('hay_grade', '')) if use_standard_grade else str(emp.get('grade', ''))
         sal = emp.get(salary_key) or 0
         if not grade or sal <= 0:
             continue
         grade_salaries[grade].append(sal)
+        grade_employees[grade].append(emp)
 
     if not grade_salaries:
         return _empty_result()
@@ -92,6 +94,9 @@ def compute_grade_trend(employees: list, salary_type: str = 'tcc',
     # 代码生成 storyline
     storyline = _compute_storyline(grades, company_medians, market_p50, annotations)
 
+    # 匿名散点：每个职级下员工 {id, level, salary, dept}，id 按整体序号 A01, A02...
+    employees_by_grade = _anonymize_employees(grades, grade_employees, salary_key)
+
     return {
         'grades': grades,
         'company_counts': company_counts,
@@ -105,6 +110,7 @@ def compute_grade_trend(employees: list, salary_type: str = 'tcc',
         'market_p75_trendline': market_p75_trend,
         'annotations': annotations,
         'storyline': storyline,
+        'employees_by_grade': employees_by_grade,
         'salary_type': salary_type,
         'use_standard_grade': use_standard_grade,
     }
@@ -122,6 +128,7 @@ def _empty_result():
         'market_p50_actual': [], 'market_p50_trendline': [],
         'market_p75_actual': [], 'market_p75_trendline': [],
         'annotations': [], 'storyline': '',
+        'employees_by_grade': {},
         'salary_type': 'tcc', 'use_standard_grade': False,
     }
 
@@ -239,6 +246,32 @@ def _compute_annotations(grades, company, mkt_p25, mkt_p50, mkt_p75) -> list:
             })
 
     return annotations
+
+
+def _anonymize_employees(grades: list, grade_employees: dict, salary_key: str) -> dict:
+    """
+    生成匿名散点数据：{level: [{id, salary, dept}]}。
+    id 按全局序号 A01, A02... 稳定分配（同一 session 内下次进来会不同，但无意义，
+    前端只用来显示 Tooltip 和区分不同点）。
+    薪酬转换成万元（Y 轴单位要求）。
+    """
+    result: dict[str, list[dict]] = {}
+    counter = 0
+    for g in grades:
+        emps = grade_employees.get(g, [])
+        out = []
+        for emp in emps:
+            counter += 1
+            sal = emp.get(salary_key) or 0
+            out.append({
+                'id': f'A{counter:02d}',
+                'level': g,
+                'salary': round(sal / 10000, 1),
+                'dept': emp.get('department', ''),
+                'function': emp.get('job_function', ''),
+            })
+        result[g] = out
+    return result
 
 
 def _compute_storyline(grades, company, mkt_p50, annotations) -> str:
