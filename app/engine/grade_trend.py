@@ -58,7 +58,6 @@ def compute_grade_trend(employees: list, salary_type: str = 'tcc',
             continue
 
         p25s, p50s, p75s = [], [], []
-        pkey = f'{salary_type}_p25' if salary_type == 'tcc' else 'base_p25'
         for (jf, hg), mkt in market_index.items():
             if hg != hay:
                 continue
@@ -67,9 +66,11 @@ def compute_grade_trend(employees: list, salary_type: str = 'tcc',
                 p50s.append(mkt.get('ttc_p50', 0))
                 p75s.append(mkt.get('ttc_p75', 0))
             else:
-                p25s.append(mkt.get('base_p25', 0))
-                p50s.append(mkt.get('base_p50', 0))
-                p75s.append(mkt.get('base_p75', 0))
+                # market_data.json 里 base_p* 是月度基本工资（base_p50=7000 vs ttc_p50=92400）；
+                # 公司侧 base_annual 是年度，这里 ×12 年化后才对得上
+                p25s.append(mkt.get('base_p25', 0) * 12)
+                p50s.append(mkt.get('base_p50', 0) * 12)
+                p75s.append(mkt.get('base_p75', 0) * 12)
 
         p25s = [v for v in p25s if v > 0]
         p50s = [v for v in p50s if v > 0]
