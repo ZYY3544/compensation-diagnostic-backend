@@ -108,12 +108,16 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
             dept_grade[(emp['department'], emp['grade'])].append(emp['cr'])
 
     heatmap_values = []
+    heatmap_counts = []
     for dept in departments:
-        row = []
+        row_values = []
+        row_counts = []
         for grade in grades:
             crs = dept_grade.get((dept, grade), [])
-            row.append(round(safe_mean(crs), 2) if crs else None)
-        heatmap_values.append(row)
+            row_values.append(round(safe_mean(crs), 2) if crs else None)
+            row_counts.append(len(crs))
+        heatmap_values.append(row_values)
+        heatmap_counts.append(row_counts)
 
     # Step 4: 低于 P25 的岗位明细（前端可展示）
     below_p25_detail = []
@@ -179,6 +183,7 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
             'departments': departments,
             'grades': grades,
             'values': heatmap_values,
+            'counts': heatmap_counts,
         },
         'below_p25_detail': below_p25_detail[:20],
         'benchmark_results': benchmark_results,
