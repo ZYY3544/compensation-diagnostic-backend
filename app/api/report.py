@@ -166,12 +166,6 @@ def get_diagnosis_summary(session_id):
         ],
         'external_cr': ec.get('overall_cr'),
         'external_below_p25': ec.get('total_below_p25'),
-        # 只保留有信号的职能（CR 偏离 0.85-1.15 正常区间的）
-        'external_fn_signals': [
-            {'name': f.get('name'), 'cr': f.get('cr'), 'n': f.get('count')}
-            for f in ec.get('cr_by_function', [])
-            if f.get('cr') is not None and (f['cr'] < 0.85 or f['cr'] > 1.15)
-        ][:5],
         'equity_high_dispersion_grades': [
             d['grade'] for d in ie.get('dispersion', []) if d.get('status') == 'high'
         ],
@@ -415,14 +409,6 @@ def _generate_key_findings(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
             'module': 'external_competitiveness',
             'text': f'整体薪酬显著高于市场（CR {overall_cr}，>P75 x 2），建议核对职级对标口径或市场分位取值',
         })
-
-    for f in ext_comp.get('cr_by_function', []):
-        if f.get('cr', 1) < 0.85 and f.get('below_p25_count', 0) > 0:
-            findings.append({
-                'priority': 'P1', 'severity': 'red',
-                'module': 'external_competitiveness',
-                'text': f'{f["name"]}薪酬严重偏低（CR {f["cr"]}），{f["below_p25_count"]} 人低于 P25',
-            })
 
     # 内部公平性
     if int_equity.get('high_dispersion_count', 0) > 0:

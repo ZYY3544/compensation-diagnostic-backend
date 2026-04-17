@@ -95,21 +95,6 @@ def generate_report_pdf(report: dict, advice: dict = None) -> bytes:
             cr = mod.get('overall_cr', '—')
             below = mod.get('total_below_p25', 0)
             elements.append(Paragraph(f'整体 CR: {cr}，低于 P25 人数: {below}', body_style))
-            # CR by function 表格
-            cr_funcs = mod.get('cr_by_function', [])
-            if cr_funcs:
-                table_data = [['职能', 'CR', '人数', '低于P25']]
-                for f in cr_funcs:
-                    table_data.append([f['name'], str(f['cr']), str(f['count']), str(f.get('below_p25_count', 0))])
-                t = Table(table_data, colWidths=[50*mm, 30*mm, 25*mm, 30*mm])
-                t.setStyle(TableStyle([
-                    ('FONTNAME', (0, 0), (-1, -1), font_name),
-                    ('FONTSIZE', (0, 0), (-1, -1), 9),
-                    ('BACKGROUND', (0, 0), (-1, 0), colors.Color(0.9, 0.9, 0.95)),
-                    ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-                    ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-                ]))
-                elements.append(t)
 
         elif key == 'internal_equity':
             high = mod.get('high_dispersion_count', 0)

@@ -6,7 +6,6 @@
 - result.summary.below_p25_count: 低于 P25 人数
 - result.summary.total_headcount: 总人数
 - result.benchmark_results: 每个部门×层级的明细（percentile/company_median/market_p50/status）
-- result.cr_by_function: 各职能平均 CR
 - interview: 访谈纪要（可选）
 要求：
 - 第一句给判断："整体在市场 P{X}" 不要说，应该说 "市场上 {100-X}% 的同类岗位比你们高，差距明显" 这类判断

@@ -98,27 +98,6 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
 
     emps_with_cr = [e for e in employees if e.get('cr') is not None]
 
-    # Step 2: 按职能分组
-    func_groups = defaultdict(list)
-    for emp in emps_with_cr:
-        func_groups[emp.get('job_function', '未知')].append(emp)
-
-    cr_by_function = []
-    for func, emps in sorted(func_groups.items()):
-        crs = [e['cr'] for e in emps]
-        percentiles = [e['percentile'] for e in emps if e.get('percentile') is not None]
-        avg_cr = safe_mean(crs)
-        avg_pct = round(safe_mean(percentiles)) if percentiles else None
-        below_p25 = sum(1 for e in emps if (e.get('percentile') or 50) < 25)
-        cr_by_function.append({
-            'name': func,
-            'cr': avg_cr,
-            'avg_percentile': avg_pct,
-            'count': len(emps),
-            'below_p25_count': below_p25,
-            'status': 'warning' if avg_cr < 0.9 else 'normal',
-        })
-
     # Step 3: CR 热力图（部门 × 职级）
     departments = sorted(set(e.get('department', '未知') for e in employees if e.get('department')))
     grades = sorted(set(e.get('grade', '') for e in employees if e.get('grade')))
@@ -196,7 +175,6 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
         'overall_cr': overall_cr,
         'total_employees_with_cr': total_with_cr,
         'total_below_p25': total_below_p25,
-        'cr_by_function': cr_by_function,
         'cr_heatmap': {
             'departments': departments,
             'grades': grades,
