@@ -243,17 +243,23 @@ def get_module_insight(session_id):
     # 精简模块数据（去掉大列表，只保留统计数字）
     slim_data = {k: v for k, v in module_data.items()
                  if k not in ('cr_heatmap', 'deviation_matrix', 'boxplot', 'below_p25_detail', 'trend')}
+    # 访谈为空时用明确标记，避免 LLM 把 "{}" 当成"有访谈但内容短"去硬关联
+    interview_payload = str(interview_notes)[:1000] if interview_notes else '无访谈'
     user_content = json.dumps({
         'module': module_key,
         'module_data': slim_data,
         'diagnosis_summary': report.get('key_findings', [])[:3],
-        'interview_notes': str(interview_notes)[:1000],
+        'interview_notes': interview_payload,
     }, ensure_ascii=False)
 
     def _call_ai():
         from app.agents.base_agent import BaseAgent
         agent = BaseAgent(temperature=0.5)
-        system_prompt = agent.load_prompt('module_insight.txt')
+        # 按模块路由到专属 prompt；文件不存在时 fallback 到通用 module_insight.txt
+        try:
+            system_prompt = agent.load_prompt(f'module_insight_{module_key}.txt')
+        except FileNotFoundError:
+            system_prompt = agent.load_prompt('module_insight.txt')
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_content},
