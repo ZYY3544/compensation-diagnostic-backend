@@ -2,7 +2,18 @@
 全量分析 JSON：一次计算，多维度覆盖。
 所有 skill 都读这份 JSON，不重复计算。
 数据变化（重新上传、调整映射）时需调用 invalidate() 清空。
+
+SCHEMA_VERSION：当 engine 输出结构变化时（新增/删除字段、嵌套结构调整），
+必须 bump 这个版本号，否则旧 session 的缓存不会失效，前端会拿到旧 schema
+导致字段缺失或类型错配。仅数据值变化（如算法微调）不需要 bump。
 """
+
+# 历史变更：
+# v1: 初版
+# v2: grade_trend 改成 {overall, by_department}；cr_heatmap 行从 departments
+#     改成 functions（带 rows/row_label）；deviation_top 加 company_grade_p50；
+#     summary 加 segment_distribution
+SCHEMA_VERSION = 'v2'
 from app.engine import (
     external_competitiveness, internal_equity,
     pay_performance, fix_variable_ratio, labor_cost,
@@ -91,12 +102,14 @@ def get_or_compute(session: dict) -> dict:
 
 
 def _compute_data_version(session: dict) -> str:
-    """基于关键数据字段生成简单的版本指纹。数据变化版本就变。"""
+    """基于关键数据字段 + SCHEMA_VERSION 生成版本指纹。
+    数据变 或 输出结构变（部署新版本）都会让指纹变，强制重算。"""
     import hashlib
     employees = session.get('cleaned_employees') or session.get('_employees', [])
-    # 用员工数 + 清洗 mutation 数 + 映射状态组合
+    # 用员工数 + 清洗 mutation 数 + 映射状态 + schema 版本组合
     fingerprint = (
-        f'{len(employees)}'
+        f'{SCHEMA_VERSION}'
+        f':{len(employees)}'
         f':{len(session.get("_mutations", []))}'
         f':{bool(session.get("_ai_cleansing_done"))}'
         f':{bool(session.get("_grade_match_done"))}'

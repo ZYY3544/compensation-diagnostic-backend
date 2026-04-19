@@ -261,11 +261,14 @@ def _generate_narrative(skill: dict, result: dict, session: dict | None) -> str:
                 "如果访谈背景里有相关信息，关联起来。只输出文本，不要 markdown。"
             )
 
-        interview = session.get('interview_notes', {}) if session else {}
+        # 跟 module-insight 走同一套约定：访谈为空时传明确字符串 '无访谈'，
+        # 避免传 None / '{}' 让 LLM 误以为有访谈数据进而编造（之前的幻觉 bug）
+        interview = session.get('interview_notes') if session else None
+        interview_payload = str(interview)[:800] if interview else '无访谈'
         user_content = json.dumps({
             'skill': skill['key'],
             'result': result,
-            'interview': str(interview)[:800] if interview else None,
+            'interview': interview_payload,
         }, ensure_ascii=False)
 
         messages = [
