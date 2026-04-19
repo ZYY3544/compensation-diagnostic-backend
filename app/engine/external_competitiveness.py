@@ -98,26 +98,33 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
 
     emps_with_cr = [e for e in employees if e.get('cr') is not None]
 
-    # Step 3: CR 热力图（部门 × 职级）
+    # Step 3: CR 热力图（职能 × 职级）—— 部门视角已经被职级偏离柱图覆盖，这里换职能维度避免重复
     departments = sorted(set(e.get('department', '未知') for e in employees if e.get('department')))
     grades = sorted(set(e.get('grade', '') for e in employees if e.get('grade')))
+    functions = sorted(set(e.get('job_function', '') for e in employees if e.get('job_function')))
 
-    dept_grade = defaultdict(list)
+    func_grade = defaultdict(list)
     for emp in emps_with_cr:
-        if emp.get('department') and emp.get('grade'):
-            dept_grade[(emp['department'], emp['grade'])].append(emp['cr'])
+        if emp.get('job_function') and emp.get('grade'):
+            func_grade[(emp['job_function'], emp['grade'])].append(emp['cr'])
 
     heatmap_values = []
     heatmap_counts = []
-    for dept in departments:
+    for func in functions:
         row_values = []
         row_counts = []
         for grade in grades:
-            crs = dept_grade.get((dept, grade), [])
+            crs = func_grade.get((func, grade), [])
             row_values.append(round(safe_mean(crs), 2) if crs else None)
             row_counts.append(len(crs))
         heatmap_values.append(row_values)
         heatmap_counts.append(row_counts)
+
+    # benchmark_results 还是按部门×职级（给意图查询用），保留 dept_grade 索引
+    dept_grade = defaultdict(list)
+    for emp in emps_with_cr:
+        if emp.get('department') and emp.get('grade'):
+            dept_grade[(emp['department'], emp['grade'])].append(emp['cr'])
 
     # Step 4: 低于 P25 的岗位明细（前端可展示）
     below_p25_detail = []
@@ -141,6 +148,25 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
     # 计算平均分位（skill 的 output_schema 里要的 summary.avg_percentile）
     percentiles = [e.get('percentile') for e in emps_with_cr if e.get('percentile') is not None]
     avg_percentile = round(safe_mean(percentiles)) if percentiles else None
+
+    # 分位段人数分布：<P25 / P25-P50 / P50-P75 / >P75（顶部 KPI 总览用）
+    seg_counts = {'below_p25': 0, 'p25_p50': 0, 'p50_p75': 0, 'above_p75': 0}
+    for p in percentiles:
+        if p < 25: seg_counts['below_p25'] += 1
+        elif p < 50: seg_counts['p25_p50'] += 1
+        elif p < 75: seg_counts['p50_p75'] += 1
+        else: seg_counts['above_p75'] += 1
+    total_p = len(percentiles)
+    segment_distribution = [
+        {'key': 'below_p25', 'label': '< P25', 'count': seg_counts['below_p25'],
+         'pct': round(seg_counts['below_p25'] / total_p * 100, 1) if total_p else 0},
+        {'key': 'p25_p50', 'label': 'P25 - P50', 'count': seg_counts['p25_p50'],
+         'pct': round(seg_counts['p25_p50'] / total_p * 100, 1) if total_p else 0},
+        {'key': 'p50_p75', 'label': 'P50 - P75', 'count': seg_counts['p50_p75'],
+         'pct': round(seg_counts['p50_p75'] / total_p * 100, 1) if total_p else 0},
+        {'key': 'above_p75', 'label': '> P75', 'count': seg_counts['above_p75'],
+         'pct': round(seg_counts['above_p75'] / total_p * 100, 1) if total_p else 0},
+    ]
 
     # benchmark_results: 按部门×层级聚合
     benchmark_results = []
@@ -172,15 +198,32 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
                 'status': 'below_p25' if pct and pct < 25 else 'below_p50' if pct and pct < 50 else 'normal',
             })
 
-    # Step 5: 偏离市场最大的岗位组（取前 10%，按职能×职级分组，回答"先调谁"）
-    deviation_top, summary_text = _compute_deviation_top(emps_with_cr)
+    # Step 5: 偏离市场最大的员工（取前 10%）
+    # 先算公司同职级 P50（不分部门），给 deviation_top 每条加 company_grade_p50
+    grade_company_p50 = {}
+    grade_to_emps = defaultdict(list)
+    for emp in emps_with_cr:
+        if emp.get('grade'):
+            grade_to_emps[emp['grade']].append(emp.get('base_monthly') or 0)
+    for g, sals in grade_to_emps.items():
+        sals_sorted = sorted([s for s in sals if s > 0])
+        if sals_sorted:
+            n = len(sals_sorted)
+            grade_company_p50[g] = (sals_sorted[n // 2] if n % 2 else
+                                    (sals_sorted[n // 2 - 1] + sals_sorted[n // 2]) / 2)
+
+    deviation_top, summary_text = _compute_deviation_top(emps_with_cr, grade_company_p50)
 
     return {
         'overall_cr': overall_cr,
         'total_employees_with_cr': total_with_cr,
         'total_below_p25': total_below_p25,
         'cr_heatmap': {
-            'departments': departments,
+            # 行维度从 departments 改为 functions（保持 'rows' 这个语义化键，
+            # 同时为兼容旧前端短期保留 functions 别名）
+            'rows': functions,
+            'row_label': '职能',
+            'functions': functions,
             'grades': grades,
             'values': heatmap_values,
             'counts': heatmap_counts,
@@ -194,20 +237,23 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
             'below_p25_count': total_below_p25,
             'below_p25_pct': round(total_below_p25 / total_with_cr * 100, 1) if total_with_cr > 0 else 0,
             'avg_percentile': avg_percentile,
+            'segment_distribution': segment_distribution,
         },
         'status': 'warning' if (overall_cr and overall_cr < 0.9) else 'normal',
     }
 
 
-def _compute_deviation_top(emps_with_cr):
+def _compute_deviation_top(emps_with_cr, grade_company_p50=None):
     """
     按员工粒度（不再按岗位组），把每个人的 base_monthly vs 市场 P50 的偏离绝对值
     排序后取前 10%。
     - 异常值 should 已在数据清洗阶段处理，这里不再过滤
     - 至少返回 3 条避免太少；候选不足 3 时全返
+    - grade_company_p50: {grade: 公司同职级 P50}，用于表格展示"所在级别公司 P50"
     - 返回 (deviation_top, summary_text)
     """
     import math
+    grade_company_p50 = grade_company_p50 or {}
     candidates = []
     for emp in emps_with_cr:
         market = emp.get('_market') or {}
@@ -216,13 +262,15 @@ def _compute_deviation_top(emps_with_cr):
         if not market_p50 or not base_monthly:
             continue
         deviation_pct = (base_monthly - market_p50) / market_p50 * 100
+        grade = emp.get('grade', '')
         candidates.append({
             'id': emp.get('id', ''),
             'job_title': emp.get('job_title', ''),
             'department': emp.get('department', ''),
             'function': emp.get('job_function', ''),
-            'grade': emp.get('grade', ''),
+            'grade': grade,
             'base_monthly': round(base_monthly),
+            'company_grade_p50': round(grade_company_p50.get(grade, 0)),
             'market_p50': round(market_p50),
             'deviation_pct': round(deviation_pct, 1),
             'direction': 'below' if deviation_pct < 0 else 'above',

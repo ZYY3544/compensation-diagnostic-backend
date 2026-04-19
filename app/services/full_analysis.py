@@ -23,14 +23,15 @@ def compute_full_analysis(employees: list, sheet2_summary: dict = None) -> dict:
     fv = fix_variable_ratio.analyze(employees)
     lc = labor_cost.analyze(employees, sheet2_summary=sheet2_summary)
 
-    # 职级薪酬趋势：两种口径各算一次，前端按 toggle 切换
+    # 职级薪酬趋势：方案 X —— 后端预聚合"公司整体" + 每个一级部门各一份，
+    # 前端切换部门时本地切换数据，零额外请求。
     try:
-        grade_trend_tcc = compute_grade_trend(employees, salary_type='tcc')
-        grade_trend_base = compute_grade_trend(employees, salary_type='base')
+        grade_trend_tcc = _build_grade_trend_by_department(employees, 'tcc')
+        grade_trend_base = _build_grade_trend_by_department(employees, 'base')
     except Exception as e:
         print(f'[full_analysis] grade_trend failed: {e}')
-        grade_trend_tcc = {}
-        grade_trend_base = {}
+        grade_trend_tcc = {'overall': {}, 'by_department': {}}
+        grade_trend_base = {'overall': {}, 'by_department': {}}
 
     return {
         'external_competitiveness': ext,
@@ -43,6 +44,27 @@ def compute_full_analysis(employees: list, sheet2_summary: dict = None) -> dict:
         'analyzed_at': now_iso(),
         'employee_count': len([e for e in employees if e.get('base_monthly')]),
     }
+
+
+def _build_grade_trend_by_department(employees: list, salary_type: str) -> dict:
+    """
+    方案 X：返回 {'overall': {...}, 'by_department': {部门: {...}}}。
+    前端选择 '公司整体' 时读 overall；选某个部门时读 by_department[部门]。
+    部门不足以画图（数据点 < 2）的就不放进 by_department，前端筛选时跳过。
+    """
+    overall = compute_grade_trend(employees, salary_type=salary_type)
+    by_dept = {}
+    departments = sorted({e.get('department') for e in employees if e.get('department')})
+    for dept in departments:
+        dept_emps = [e for e in employees if e.get('department') == dept]
+        try:
+            trend = compute_grade_trend(dept_emps, salary_type=salary_type)
+            # 至少要有 2 个职级才放进部门视图，单点画不出曲线
+            if trend and len(trend.get('grades', [])) >= 2:
+                by_dept[dept] = trend
+        except Exception as e:
+            print(f'[grade_trend by_dept] {dept} failed: {e}')
+    return {'overall': overall, 'by_department': by_dept}
 
 
 def get_or_compute(session: dict) -> dict:
