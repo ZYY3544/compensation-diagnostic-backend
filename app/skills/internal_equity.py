@@ -54,28 +54,36 @@ SKILL = {
             "type": "MetricGrid",
             "columns": 3,
             "metrics": [
-                {"label": "最异常组离散系数", "field": "worst_group.cv", "sub": "正常范围 0.15-0.25", "color_rule": ">0.25 red, 0.20-0.25 orange, <0.20 green"},
-                {"label": "最异常组极差比", "field": "worst_group.max_min_ratio", "format": "{value}x", "sub_field": "worst_group.range_display"},
-                {"label": "薪酬倒挂", "field": "summary.inversion_count", "format": "{value} 对"},
+                {"label": "离散度偏高层级数", "field": "summary.high_dispersion_count",
+                 "sub_field": "summary.total_groups", "sub_format": "共 {value} 个层级"},
+                {"label": "最高离散系数",       "field": "summary.max_cv",
+                 "sub_field": "summary.max_cv_grade", "sub_format": "{value} 层级",
+                 "color_rule": ">0.30 red, 0.20-0.30 orange, <0.20 green"},
+                {"label": "最大极差比",         "field": "summary.max_range_ratio", "format": "{value}x",
+                 "sub_field": "summary.max_range_ratio_grade", "sub_format": "{value} 层级"},
             ],
         },
         {
             "type": "BoxPlotCard",
             "title": "各层级薪酬分布",
-            "group_by": "grade",
-            "value_field": "monthly_base_salary",
-            "highlight_rule": "cv > 0.25 标红",
-            "footer": "色块宽度 = 薪酬分布范围 · 竖线 = 中位值",
+            "data_field": "boxplot",
+            "x_field": "grade",
+            "footer": "盒子 = P25-P75（中间 50% 员工）· 中线 = P50",
         },
     ],
 
     "output_schema": {
-        "equity_by_group": [
-            {"grade": "L5", "department": "研发", "headcount": 8, "median": 25000, "max": 38000, "min": 18000, "cv": 0.42, "max_min_ratio": 2.11, "status": "abnormal"}
+        "dispersion": [
+            {"grade": "L5", "count": 8, "mean": 25000, "min": 18000, "max": 38000,
+             "coefficient": 0.42, "range_ratio": 2.11, "status": "high"}
         ],
-        "inversions": [
-            {"subordinate_id": "E006", "subordinate_salary": 38000, "manager_id": "E043", "manager_salary": 35000}
+        "boxplot": [
+            {"grade": "L5", "min": 18000, "q1": 22000, "median": 25000, "q3": 32000, "max": 38000}
         ],
-        "summary": {"abnormal_groups": 2, "total_groups": 8, "inversion_count": 2, "avg_cv": 0.24},
+        "summary": {
+            "total_groups": 8, "high_dispersion_count": 2,
+            "max_cv_grade": "L5", "max_cv": 0.42,
+            "max_range_ratio_grade": "L5", "max_range_ratio": 2.11,
+        },
     },
 }

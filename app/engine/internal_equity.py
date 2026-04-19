@@ -87,6 +87,23 @@ def _analyze_impl(employees):
             'max': sals[-1],
         })
 
+    # 给 light skill (internal_equity) MetricGrid 用的 summary
+    summary = {
+        'total_groups': len(dispersion),
+        'high_dispersion_count': high_dispersion_count,
+        'max_cv_grade': None,
+        'max_cv': None,
+        'max_range_ratio_grade': None,
+        'max_range_ratio': None,
+    }
+    if dispersion:
+        worst_cv = max(dispersion, key=lambda d: d['coefficient'])
+        summary['max_cv_grade'] = worst_cv['grade']
+        summary['max_cv'] = worst_cv['coefficient']
+        worst_range = max(dispersion, key=lambda d: d['range_ratio'])
+        summary['max_range_ratio_grade'] = worst_range['grade']
+        summary['max_range_ratio'] = worst_range['range_ratio']
+
     return {
         'deviation_matrix': {
             'departments': departments,
@@ -96,5 +113,6 @@ def _analyze_impl(employees):
         'dispersion': dispersion,
         'boxplot': boxplot,
         'high_dispersion_count': high_dispersion_count,
+        'summary': summary,
         'status': 'attention' if high_dispersion_count > 0 else 'normal',
     }

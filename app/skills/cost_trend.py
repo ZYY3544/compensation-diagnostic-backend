@@ -33,35 +33,44 @@ SKILL = {
 
     "render_components": [
         {
-            "type": "LineChartCard",
-            "title": "人工成本 vs 营收增长趋势",
-            "lines": [
-                {"label": "营收增速", "field": "yearly.revenue_growth", "color": "blue"},
-                {"label": "人工成本增速", "field": "yearly.labor_cost_growth", "color": "red"},
-            ],
-            "x_axis": "year",
-        },
-        {
             "type": "MetricGrid",
             "columns": 3,
             "metrics": [
-                {"label": "最新人工成本占比", "field": "summary.latest_cost_ratio", "format": "percentage"},
-                {"label": "营收年复合增速", "field": "summary.revenue_cagr", "format": "percentage"},
-                {"label": "人工成本年复合增速", "field": "summary.labor_cost_cagr", "format": "percentage", "color_rule": "> revenue_cagr red"},
+                {"label": "人工成本占比",     "field": "kpi.cost_revenue_ratio", "format": "percentage",
+                 "sub": "成本 / 营收"},
+                {"label": "人均营收",         "field": "kpi.revenue_per_head",
+                 "sub": "万元/人"},
+                {"label": "成本同比增速",     "field": "kpi.cost_growth_pct", "format": "{value}%",
+                 "sub_field": "kpi.revenue_growth_pct", "sub_format": "营收同比 {value}%",
+                 "color_rule": "> revenue_growth_pct red"},
+            ],
+        },
+        {
+            "type": "LineChartCard",
+            "title": "人工成本与营收逐年走势",
+            "data_field": "trend",
+            "x_field": "year",
+            "series": [
+                {"label": "营收 (万)",     "field": "revenue", "color": "#2563eb"},
+                {"label": "人工成本 (万)", "field": "cost",    "color": "#dc3545"},
             ],
         },
     ],
 
     "output_schema": {
-        "yearly": [
-            {"year": 2022, "revenue": 2e9, "headcount": 5200, "labor_cost": 5.2e8, "cost_ratio": 0.26, "per_capita_revenue": 384615}
+        "trend": [
+            {"year": 2022, "revenue": 200000, "cost": 52000, "headcount": 5200}
         ],
-        "summary": {
-            "revenue_cagr": 0.12,
-            "labor_cost_cagr": 0.18,
-            "cost_exceeds_revenue": True,
-            "latest_cost_ratio": 0.31,
-            "trend": "deteriorating",
+        "kpi": {
+            "cost_revenue_ratio": 0.31,
+            "revenue_per_head": 38.5,
+            "profit_per_head": 8.2,
+            "cost_growth_pct": 18.0,
+            "revenue_growth_pct": 12.0,
         },
+        "current_headcount": 5200,
+        "current_total_cost": 520000000,
+        "has_trend_data": True,
+        "status": "normal",
     },
 }
