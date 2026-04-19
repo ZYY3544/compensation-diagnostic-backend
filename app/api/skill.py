@@ -175,6 +175,8 @@ def _build_data_snapshot(session: dict | None) -> dict:
         'full_analysis': full,
         'grade_mapping': session.get('_grade_match_result', {}).get('grade_mapping'),
         'func_mapping': session.get('_func_match_result', {}).get('family_table'),
+        # cost_trend / labor_cost engine 需要这个，否则 KPI 全 None
+        'sheet2_summary': session.get('parse_result', {}).get('sheet2_summary'),
     }
 
 

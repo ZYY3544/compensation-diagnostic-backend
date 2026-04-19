@@ -42,31 +42,36 @@ SKILL = {
 
     "render_components": [
         {
-            "type": "StackedBarCard",
-            "title": "各部门薪酬结构",
-            "group_by": "department",
-            "segments": ["固定", "浮动", "津贴"],
-            "colors": ["blue", "orange", "gray"],
-            "show_percentage": True,
-        },
-        {
             "type": "MetricGrid",
             "columns": 2,
             "metrics": [
-                {"label": "全公司固定占比", "field": "summary.company_avg_fixed_ratio", "format": "percentage"},
-                {"label": "全公司浮动占比", "field": "summary.company_avg_variable_ratio", "format": "percentage"},
+                {"label": "全公司固定占比", "field": "overall_fix_pct", "format": "{value}%",
+                 "color_rule": ">85 orange, <60 orange"},
+                {"label": "全公司浮动占比", "field": "overall_var_pct", "format": "{value}%"},
             ],
+        },
+        {
+            "type": "BarHCard",
+            "title": "各部门固定薪酬占比",
+            "data_field": "pay_mix_by_dept",
+            "bar_label": "department",
+            "bar_value": "fix_pct",
+            "bar_max": 100,
+            "marker": 70,
+            "color_rule": ">85 orange, 60-85 green, <60 red",
+            "footer": "竖线 = 70%（行业典型固定占比参考）",
         },
     ],
 
     "output_schema": {
-        "pay_mix_by_group": [
-            {"grade": "L5", "department": "研发", "headcount": 8, "avg_base": 300000, "avg_bonus": 60000, "avg_allowance": 24000, "fixed_ratio": 0.78, "variable_ratio": 0.16, "allowance_ratio": 0.06, "status": "normal"}
+        "pay_mix_by_grade": [
+            {"grade": "L5", "headcount": 8, "fix_pct": 78, "var_pct": 22}
         ],
-        "summary": {
-            "company_avg_fixed_ratio": 0.72,
-            "company_avg_variable_ratio": 0.22,
-            "warnings": ["销售固定占比偏高(82%)，浮动激励不足"],
-        },
+        "pay_mix_by_dept": [
+            {"department": "研发", "headcount": 12, "fix_pct": 78, "var_pct": 22}
+        ],
+        "overall_fix_pct": 75,
+        "overall_var_pct": 25,
+        "status": "normal",
     },
 }

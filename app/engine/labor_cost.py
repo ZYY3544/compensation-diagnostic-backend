@@ -13,7 +13,13 @@ def analyze(data_snapshot=None, params=None, company_data=None, sheet2_summary=N
     if not isinstance(data_snapshot, dict):
         data_snapshot = {}
     emps = data_snapshot.get('employees') or []
-    s2 = (data_snapshot.get('full_analysis') or {}).get('_sheet2_summary') or sheet2_summary
+    # 优先取顶层（skill API 通过 _build_data_snapshot 直接塞）；
+    # fallback 到 full_analysis 内嵌（老路径）；最后才用关键字参数
+    s2 = (
+        data_snapshot.get('sheet2_summary')
+        or (data_snapshot.get('full_analysis') or {}).get('_sheet2_summary')
+        or sheet2_summary
+    )
     return _analyze_impl(emps, company_data, s2)
 
 
