@@ -199,45 +199,30 @@ def _analyze_impl(employees, market_lookup_fn, params=None):
     }
 
 
-def _median(values):
-    """纯数值列表的中位数，空列表返回 0"""
-    if not values:
-        return 0
-    s = sorted(values)
-    n = len(s)
-    if n % 2 == 1:
-        return s[n // 2]
-    return (s[n // 2 - 1] + s[n // 2]) / 2
-
-
 def _compute_deviation_top(emps_with_cr):
     """
-    按职能×职级分组，按公司中位值偏离市场 P50 的绝对幅度排序，取前 10%。
-    - 不再剔除小样本或大偏离：异常值 should 已在数据清洗阶段处理；
-      用户保留下来的就视为真实数据，让人数列自己说话
+    按员工粒度（不再按岗位组），把每个人的 base_monthly vs 市场 P50 的偏离绝对值
+    排序后取前 10%。
+    - 异常值 should 已在数据清洗阶段处理，这里不再过滤
     - 至少返回 3 条避免太少；候选不足 3 时全返
     - 返回 (deviation_top, summary_text)
     """
     import math
-    groups = defaultdict(list)
-    for emp in emps_with_cr:
-        jf = emp.get('job_function')
-        gr = emp.get('grade')
-        if jf and gr and emp.get('_market'):
-            groups[(jf, gr)].append(emp)
-
     candidates = []
-    for (jf, gr), group_emps in groups.items():
-        market_p50 = group_emps[0]['_market'].get('base_p50') or 0
-        if not market_p50:
+    for emp in emps_with_cr:
+        market = emp.get('_market') or {}
+        market_p50 = market.get('base_p50') or 0
+        base_monthly = emp.get('base_monthly') or 0
+        if not market_p50 or not base_monthly:
             continue
-        company_median = _median([e.get('base_monthly', 0) for e in group_emps])
-        deviation_pct = (company_median - market_p50) / market_p50 * 100
+        deviation_pct = (base_monthly - market_p50) / market_p50 * 100
         candidates.append({
-            'function': jf,
-            'grade': gr,
-            'headcount': len(group_emps),
-            'company_median': round(company_median),
+            'id': emp.get('id', ''),
+            'job_title': emp.get('job_title', ''),
+            'department': emp.get('department', ''),
+            'function': emp.get('job_function', ''),
+            'grade': emp.get('grade', ''),
+            'base_monthly': round(base_monthly),
             'market_p50': round(market_p50),
             'deviation_pct': round(deviation_pct, 1),
             'direction': 'below' if deviation_pct < 0 else 'above',
@@ -251,9 +236,9 @@ def _compute_deviation_top(emps_with_cr):
     below = sum(1 for x in deviation_top if x['deviation_pct'] < 0)
     above = total - below
     if total == 0:
-        summary_text = '暂未识别出偏离市场的岗位组'
+        summary_text = '暂未识别出偏离市场的员工'
     else:
-        summary_text = (f'按偏离幅度取前 10%（共 {total} 个岗位组），'
-                        f'其中 {below} 个偏低需要补齐，{above} 个偏高建议核查')
+        summary_text = (f'按个人偏离市场 P50 的幅度取前 10%（共 {total} 人），'
+                        f'其中 {below} 人偏低需要补齐，{above} 人偏高建议核查')
 
     return deviation_top, summary_text
