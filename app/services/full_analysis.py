@@ -14,7 +14,8 @@ SCHEMA_VERSION：当 engine 输出结构变化时（新增/删除字段、嵌套
 #     改成 functions（带 rows/row_label）；deviation_top 加 company_grade_p50；
 #     summary 加 segment_distribution
 # v3: internal_equity 加 views.{base, tcc} 支持年基本工资/年度总现金切换
-SCHEMA_VERSION = 'v3'
+# v4: fix_variable_ratio 加 pay_mix_by_dept_grade 支持按部门筛选的职级固浮比
+SCHEMA_VERSION = 'v4'
 from app.engine import (
     external_competitiveness, internal_equity,
     pay_performance, fix_variable_ratio, labor_cost,

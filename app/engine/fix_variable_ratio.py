@@ -17,9 +17,10 @@ def analyze(data_snapshot=None, params=None):
 
 
 def _analyze_impl(employees):
-    # 按职级分组
+    # 按职级 / 按部门 / 按部门×职级 分组
     grade_data = defaultdict(lambda: {'fixed': [], 'variable': [], 'tcc': []})
     dept_data = defaultdict(lambda: {'fixed': [], 'variable': [], 'tcc': []})
+    dept_grade_data = defaultdict(lambda: defaultdict(lambda: {'fixed': [], 'variable': [], 'tcc': []}))
 
     for emp in employees:
         base = emp.get('base_monthly', 0) or 0
@@ -35,6 +36,10 @@ def _analyze_impl(employees):
             grade_data[grade]['fixed'].append(annual_fixed)
             grade_data[grade]['variable'].append(variable)
             grade_data[grade]['tcc'].append(tcc)
+            if dept:
+                dept_grade_data[dept][grade]['fixed'].append(annual_fixed)
+                dept_grade_data[dept][grade]['variable'].append(variable)
+                dept_grade_data[dept][grade]['tcc'].append(tcc)
 
         if dept and base > 0:
             dept_data[dept]['fixed'].append(annual_fixed)
@@ -87,9 +92,28 @@ def _analyze_impl(employees):
     total_all = total_fixed + total_var
     overall_fix_pct = round(total_fixed / total_all * 100) if total_all > 0 else 0
 
+    # 部门 × 职级 固浮比（给前端按部门筛选后的职级柱状图用）
+    pay_mix_by_dept_grade = {}
+    for dept in sorted(dept_grade_data.keys()):
+        rows = []
+        for grade in sorted(dept_grade_data[dept].keys()):
+            d = dept_grade_data[dept][grade]
+            avg_fixed = round(safe_mean(d['fixed']))
+            avg_var = round(safe_mean(d['variable']))
+            total = avg_fixed + avg_var
+            fix_pct = round(avg_fixed / total * 100) if total > 0 else 0
+            rows.append({
+                'grade': grade, 'fixed': avg_fixed, 'variable': avg_var,
+                'total': total, 'fix_pct': fix_pct, 'var_pct': 100 - fix_pct,
+                'count': len(d['fixed']),
+            })
+        pay_mix_by_dept_grade[dept] = rows
+
     return {
         'pay_mix_by_grade': pay_mix_by_grade,
         'pay_mix_by_dept': pay_mix_by_dept,
+        'pay_mix_by_dept_grade': pay_mix_by_dept_grade,
+        'departments': sorted(dept_grade_data.keys()),
         'overall_fix_pct': overall_fix_pct,
         'overall_var_pct': 100 - overall_fix_pct,
         'status': 'normal',
