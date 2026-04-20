@@ -48,6 +48,7 @@ def _analyze_impl(employees):
     return {
         # 顶层兼容字段 = base.overall 视图
         'deviation_matrix': base_overall['deviation_matrix'],
+        'grade_dept_medians': base_overall['grade_dept_medians'],
         'dispersion': base_overall['dispersion'],
         'boxplot': base_overall['boxplot'],
         'high_dispersion_count': base_overall['high_dispersion_count'],
@@ -76,7 +77,7 @@ def _compute_view(employees, salary_key, grades, departments):
             if emp.get('department'):
                 dept_grade_salaries[(emp['department'], emp['grade'])].append(sal)
 
-    # 偏离度矩阵
+    # 偏离度矩阵（老格式，保留做兼容）
     deviation_values = []
     for dept in departments:
         row = []
@@ -91,6 +92,24 @@ def _compute_view(employees, salary_key, grades, departments):
             else:
                 row.append(None)
         deviation_values.append(row)
+
+    # 职级 × 部门 中位值矩阵（新格式：行=职级，列=部门，最右列=不分部门整体中位）
+    def _median(nums):
+        if not nums: return None
+        s = sorted(nums)
+        n = len(s)
+        return s[n // 2] if n % 2 else (s[n // 2 - 1] + s[n // 2]) / 2
+
+    grade_dept_median_values = []  # shape: [grade][dept]
+    grade_overall_medians = []     # shape: [grade]
+    for grade in grades:
+        row = []
+        for dept in departments:
+            sals = dept_grade_salaries.get((dept, grade), [])
+            row.append(round(_median(sals)) if sals else None)
+        grade_dept_median_values.append(row)
+        overall = _median(grade_salaries.get(grade, []))
+        grade_overall_medians.append(round(overall) if overall else None)
 
     # 离散度分析
     dispersion = []
@@ -146,6 +165,13 @@ def _compute_view(employees, salary_key, grades, departments):
     return {
         'deviation_matrix': {
             'departments': departments, 'grades': grades, 'values': deviation_values,
+        },
+        # 新：职级 × 部门 中位值矩阵
+        'grade_dept_medians': {
+            'grades': grades,
+            'departments': departments,
+            'values': grade_dept_median_values,       # [grade][dept] 绝对中位值
+            'overall_medians': grade_overall_medians, # [grade] 不分部门的整体中位
         },
         'dispersion': dispersion,
         'boxplot': boxplot,
