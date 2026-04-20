@@ -1,10 +1,12 @@
 """
 模块三：薪酬结构（Pay Mix）分析
 - 各部门/层级的固浮比
+- 公司 vs 市场的固浮比对比
 - 堆叠柱状图数据
 """
 from collections import defaultdict
 from app.engine.common import safe_mean
+from app.services.market_data import lookup_market_salary
 
 
 def analyze(data_snapshot=None, params=None):
@@ -109,11 +111,67 @@ def _analyze_impl(employees):
             })
         pay_mix_by_dept_grade[dept] = rows
 
+    # 职能 × 职级 固浮比（公司 vs 市场对比用）
+    # 按 (function, grade) 聚合公司员工，同时查市场的 base_p50 + bonus_p50 算市场固浮比
+    func_grade_data = defaultdict(lambda: defaultdict(lambda: {
+        'fixed': [], 'variable': [], 'hay_grade': None,
+    }))
+    for emp in employees:
+        base = emp.get('base_monthly', 0) or 0
+        fixed_bonus = emp.get('fixed_bonus', 0) or 0
+        variable = emp.get('variable_bonus', 0) or 0
+        func = emp.get('job_function', '')
+        grade = emp.get('grade', '')
+        hay = emp.get('hay_grade')
+        if not func or not grade or base <= 0:
+            continue
+        func_grade_data[func][grade]['fixed'].append(base * 12 + fixed_bonus)
+        func_grade_data[func][grade]['variable'].append(variable)
+        if hay is not None:
+            func_grade_data[func][grade]['hay_grade'] = int(hay)
+
+    pay_mix_by_func_grade = {}  # {函数: [行]}
+    for func in sorted(func_grade_data.keys()):
+        rows = []
+        for grade in sorted(func_grade_data[func].keys()):
+            d = func_grade_data[func][grade]
+            avg_fixed = round(safe_mean(d['fixed']))
+            avg_var = round(safe_mean(d['variable']))
+            total = avg_fixed + avg_var
+            co_fix_pct = round(avg_fixed / total * 100) if total > 0 else 0
+
+            # 查市场：用该职能 + 该职级对应的 hay_grade
+            mk_fix_pct = None
+            mk_var_pct = None
+            if d['hay_grade'] is not None:
+                m = lookup_market_salary(func, d['hay_grade'])
+                if m:
+                    mk_annual_fixed = (m.get('base_p50') or 0) * 12
+                    mk_annual_var = m.get('bonus_p50') or 0
+                    mk_total = mk_annual_fixed + mk_annual_var
+                    if mk_total > 0:
+                        mk_fix_pct = round(mk_annual_fixed / mk_total * 100)
+                        mk_var_pct = 100 - mk_fix_pct
+
+            rows.append({
+                'grade': grade,
+                'count': len(d['fixed']),
+                'company_fix_pct': co_fix_pct,
+                'company_var_pct': 100 - co_fix_pct,
+                'company_fixed': avg_fixed,
+                'company_variable': avg_var,
+                'market_fix_pct': mk_fix_pct,
+                'market_var_pct': mk_var_pct,
+            })
+        pay_mix_by_func_grade[func] = rows
+
     return {
         'pay_mix_by_grade': pay_mix_by_grade,
         'pay_mix_by_dept': pay_mix_by_dept,
         'pay_mix_by_dept_grade': pay_mix_by_dept_grade,
+        'pay_mix_by_func_grade': pay_mix_by_func_grade,
         'departments': sorted(dept_grade_data.keys()),
+        'functions': sorted(func_grade_data.keys()),
         'overall_fix_pct': overall_fix_pct,
         'overall_var_pct': 100 - overall_fix_pct,
         'status': 'normal',
