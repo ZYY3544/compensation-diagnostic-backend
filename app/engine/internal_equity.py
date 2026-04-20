@@ -18,21 +18,65 @@ def analyze(data_snapshot=None, params=None):
 
 
 def _analyze_impl(employees):
+    """输出多维度预聚合视图：
+    - 2 个薪酬口径：base（年基本工资）/ tcc（年度总现金）
+    - 3 个范围：overall（公司整体）/ by_department.{部门} / by_function.{职能}
+
+    前端通过 views[salary_type][scope] 切换，部门不足 2 人的职级/部门会被 boxplot
+    自动跳过。顶层保留 base.overall 视图字段做老版兼容。"""
     departments = sorted(set(e.get('department', '') for e in employees if e.get('department')))
     grades = sorted(set(e.get('grade', '') for e in employees if e.get('grade')))
+    functions = sorted(set(e.get('job_function', '') for e in employees if e.get('job_function')))
 
-    # 分组
+    def build(scope_emps):
+        return {
+            'base': _compute_view(scope_emps, 'base_annual', grades, departments),
+            'tcc': _compute_view(scope_emps, 'tcc', grades, departments),
+        }
+
+    overall = build(employees)
+    by_department = {
+        dept: build([e for e in employees if e.get('department') == dept])
+        for dept in departments
+    }
+    by_function = {
+        func: build([e for e in employees if e.get('job_function') == func])
+        for func in functions
+    }
+
+    base_overall = overall['base']
+    return {
+        # 顶层兼容字段 = base.overall 视图
+        'deviation_matrix': base_overall['deviation_matrix'],
+        'dispersion': base_overall['dispersion'],
+        'boxplot': base_overall['boxplot'],
+        'high_dispersion_count': base_overall['high_dispersion_count'],
+        'summary': base_overall['summary'],
+        # 重模式切换：views[salary_type].{overall,by_department,by_function}
+        'views': {
+            'overall': overall,
+            'by_department': by_department,
+            'by_function': by_function,
+        },
+        'departments': departments,
+        'functions': functions,
+        'status': 'attention' if base_overall['high_dispersion_count'] > 0 else 'normal',
+    }
+
+
+def _compute_view(employees, salary_key, grades, departments):
+    """按指定薪酬口径（salary_key: base_annual | tcc）算一套分析"""
     grade_salaries = defaultdict(list)
     dept_grade_salaries = defaultdict(list)
 
     for emp in employees:
-        sal = emp.get('base_monthly', 0) or 0
+        sal = emp.get(salary_key, 0) or 0
         if sal > 0 and emp.get('grade'):
             grade_salaries[emp['grade']].append(sal)
             if emp.get('department'):
                 dept_grade_salaries[(emp['department'], emp['grade'])].append(sal)
 
-    # 偏离度矩阵（数值，不是字符串）
+    # 偏离度矩阵
     deviation_values = []
     for dept in departments:
         row = []
@@ -61,17 +105,14 @@ def _analyze_impl(employees):
         if status == 'high':
             high_dispersion_count += 1
         dispersion.append({
-            'grade': grade,
-            'count': len(sals),
+            'grade': grade, 'count': len(sals),
             'mean': round(safe_mean(sals)),
-            'min': min(sals),
-            'max': max(sals),
-            'coefficient': coeff,
-            'range_ratio': range_ratio,
+            'min': min(sals), 'max': max(sals),
+            'coefficient': coeff, 'range_ratio': range_ratio,
             'status': status,
         })
 
-    # 箱线图数据（每个职级的分布）
+    # 箱线图
     boxplot = []
     for grade in grades:
         sals = sorted(grade_salaries.get(grade, []))
@@ -87,14 +128,12 @@ def _analyze_impl(employees):
             'max': sals[-1],
         })
 
-    # 给 light skill (internal_equity) MetricGrid 用的 summary
+    # summary（light skill MetricGrid 用）
     summary = {
         'total_groups': len(dispersion),
         'high_dispersion_count': high_dispersion_count,
-        'max_cv_grade': None,
-        'max_cv': None,
-        'max_range_ratio_grade': None,
-        'max_range_ratio': None,
+        'max_cv_grade': None, 'max_cv': None,
+        'max_range_ratio_grade': None, 'max_range_ratio': None,
     }
     if dispersion:
         worst_cv = max(dispersion, key=lambda d: d['coefficient'])
@@ -106,13 +145,10 @@ def _analyze_impl(employees):
 
     return {
         'deviation_matrix': {
-            'departments': departments,
-            'grades': grades,
-            'values': deviation_values,
+            'departments': departments, 'grades': grades, 'values': deviation_values,
         },
         'dispersion': dispersion,
         'boxplot': boxplot,
         'high_dispersion_count': high_dispersion_count,
         'summary': summary,
-        'status': 'attention' if high_dispersion_count > 0 else 'normal',
     }
