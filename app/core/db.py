@@ -54,3 +54,36 @@ def init_db():
     from app.core import models  # noqa: F401
     Base.metadata.create_all(bind=engine)
     print('[db] tables initialized')
+
+    # AUTH_DISABLED 模式下，require_auth 会注入虚拟的 admin 身份；
+    # 这里要保证对应的 workspace + user 真实存在，否则任何带外键的写入都会挂。
+    if os.getenv('AUTH_DISABLED', '').lower() == 'true':
+        _seed_admin()
+
+
+def _seed_admin():
+    """幂等：如果不存在就建 ws_admin + usr_admin。"""
+    from app.core.models import User, Workspace
+    from app.core.auth import ADMIN_USER_ID, ADMIN_WORKSPACE_ID, hash_password
+
+    db = SessionLocal()
+    try:
+        if not db.query(Workspace).filter_by(id=ADMIN_WORKSPACE_ID).first():
+            db.add(Workspace(id=ADMIN_WORKSPACE_ID, name='Admin Workspace', company_name='铭曦'))
+            db.flush()
+            print(f'[db] seeded admin workspace: {ADMIN_WORKSPACE_ID}')
+        if not db.query(User).filter_by(id=ADMIN_USER_ID).first():
+            db.add(User(
+                id=ADMIN_USER_ID,
+                email='admin@mingxi.local',
+                password_hash=hash_password('disabled-in-dev-mode'),
+                display_name='管理员',
+                workspace_id=ADMIN_WORKSPACE_ID,
+            ))
+            print(f'[db] seeded admin user: {ADMIN_USER_ID}')
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        print(f'[db] _seed_admin failed: {e}')
+    finally:
+        db.close()
