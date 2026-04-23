@@ -56,6 +56,7 @@ def create_app():
     from app.api.report import report_bp
     from app.api.pipeline_steps import pipeline_bp
     from app.api.skill import skill_bp
+    from app.api.je import je_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(sessions_bp, url_prefix='/api/sessions')
@@ -64,6 +65,7 @@ def create_app():
     app.register_blueprint(report_bp, url_prefix='/api/report')
     app.register_blueprint(pipeline_bp, url_prefix='/api/pipeline')
     app.register_blueprint(skill_bp, url_prefix='/api/skill')
+    app.register_blueprint(je_bp, url_prefix='/api/je')
 
     @app.route('/api/health')
     def health():
