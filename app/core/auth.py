@@ -17,6 +17,12 @@ JWT_SECRET = os.getenv('JWT_SECRET', 'dev-jwt-secret-please-change-in-prod')
 JWT_ALGO = 'HS256'
 JWT_EXPIRE_DAYS = 30
 
+# 开发期开关：AUTH_DISABLED=true 时所有 @require_auth 路由直接放行，
+# 注入固定 admin 身份。上线前删掉这个环境变量即可启用真实登录。
+AUTH_DISABLED = os.getenv('AUTH_DISABLED', '').lower() == 'true'
+ADMIN_USER_ID = 'usr_admin'
+ADMIN_WORKSPACE_ID = 'ws_admin'
+
 
 def hash_password(plain: str) -> str:
     return bcrypt.hashpw(plain.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -57,6 +63,10 @@ def require_auth(fn):
     """
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        if AUTH_DISABLED:
+            g.user_id = ADMIN_USER_ID
+            g.workspace_id = ADMIN_WORKSPACE_ID
+            return fn(*args, **kwargs)
         auth = request.headers.get('Authorization', '')
         if not auth.startswith('Bearer '):
             return jsonify({'error': 'unauthorized', 'reason': 'missing_token'}), 401
