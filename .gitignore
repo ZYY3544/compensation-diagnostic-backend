@@ -8,3 +8,7 @@ venv/
 dist/
 build/
 .DS_Store
+data.db
+*.sqlite
+*.sqlite3
+.claude/

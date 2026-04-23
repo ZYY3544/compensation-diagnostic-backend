@@ -6,6 +6,7 @@ import json
 import traceback
 from datetime import date, datetime
 from flask import Blueprint, jsonify, request, send_file
+from app.core.auth import require_auth
 
 
 class _SafeEncoder(json.JSONEncoder):
@@ -26,6 +27,7 @@ def _has_api_key() -> bool:
 # ======================================================================
 
 @pipeline_bp.route('/<session_id>/snapshot', methods=['POST'])
+@require_auth
 def create_snapshot(session_id):
     """复制一份原始数据，后续清洗都在副本上操作"""
     from app.api.sessions import sessions_store
@@ -45,6 +47,7 @@ def create_snapshot(session_id):
 # ======================================================================
 
 @pipeline_bp.route('/<session_id>/cleansing', methods=['POST'])
+@require_auth
 def run_cleansing(session_id):
     from app.api.sessions import sessions_store
     session = sessions_store.get(session_id)
@@ -180,6 +183,7 @@ def _mutations_to_corrections(mutations: list) -> list:
 # ======================================================================
 
 @pipeline_bp.route('/<session_id>/cleansing/revert', methods=['POST'])
+@require_auth
 def revert_cleansing(session_id):
     from app.api.sessions import sessions_store
     session = sessions_store.get(session_id)
@@ -228,6 +232,7 @@ def revert_cleansing(session_id):
 # ======================================================================
 
 @pipeline_bp.route('/<session_id>/cleansing/export', methods=['GET'])
+@require_auth
 def export_cleansed_excel(session_id):
     from app.api.sessions import sessions_store
     session = sessions_store.get(session_id)
@@ -251,6 +256,7 @@ def export_cleansed_excel(session_id):
 # ======================================================================
 
 @pipeline_bp.route('/<session_id>/grade-match', methods=['POST'])
+@require_auth
 def run_grade_match(session_id):
     from app.api.sessions import sessions_store
     session = sessions_store.get(session_id)
@@ -406,6 +412,7 @@ def run_grade_match(session_id):
 # ======================================================================
 
 @pipeline_bp.route('/<session_id>/func-match', methods=['POST'])
+@require_auth
 def run_func_match(session_id):
     from app.api.sessions import sessions_store
     session = sessions_store.get(session_id)
@@ -578,6 +585,7 @@ def run_func_match(session_id):
 # ======================================================================
 
 @pipeline_bp.route('/<session_id>/completeness-summary', methods=['POST'])
+@require_auth
 def completeness_summary(session_id):
     from app.api.sessions import sessions_store
     session = sessions_store.get(session_id)
@@ -607,6 +615,7 @@ def completeness_summary(session_id):
 
 
 @pipeline_bp.route('/<session_id>/parse-summary', methods=['POST'])
+@require_auth
 def parse_summary(session_id):
     from app.api.sessions import sessions_store
     session = sessions_store.get(session_id)

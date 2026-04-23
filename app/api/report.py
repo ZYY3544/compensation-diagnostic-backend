@@ -6,11 +6,13 @@
 """
 from flask import Blueprint, jsonify, make_response
 from app.services.market_data import lookup_market_salary
+from app.core.auth import require_auth
 
 report_bp = Blueprint('report', __name__)
 
 
 @report_bp.route('/<session_id>', methods=['GET'])
+@require_auth
 def get_report(session_id):
     from app.api.sessions import sessions_store
     from app.services.snapshot_loader import load_analysis_results
@@ -24,6 +26,7 @@ def get_report(session_id):
 
 
 @report_bp.route('/<session_id>/analyze', methods=['POST'])
+@require_auth
 def run_analysis(session_id):
     from app.api.sessions import sessions_store
     from app.services.snapshot_loader import load_cleaned_employees
@@ -127,6 +130,7 @@ def _persist_snapshot(snapshot_id, session, full_analysis, report):
 # ======================================================================
 
 @report_bp.route('/<session_id>/diagnosis-summary', methods=['POST'])
+@require_auth
 def get_diagnosis_summary(session_id):
     """AI 生成诊断摘要（opening + findings）"""
     from app.api.sessions import sessions_store
@@ -218,6 +222,7 @@ def get_diagnosis_summary(session_id):
 
 
 @report_bp.route('/<session_id>/module-insight', methods=['POST'])
+@require_auth
 def get_module_insight(session_id):
     """AI 生成单个模块的解读"""
     from flask import request
@@ -294,6 +299,7 @@ def get_module_insight(session_id):
 
 
 @report_bp.route('/<session_id>/diagnosis-advice', methods=['POST'])
+@require_auth
 def get_diagnosis_advice(session_id):
     """AI 生成诊断建议"""
     from app.api.sessions import sessions_store
@@ -469,6 +475,7 @@ def _generate_key_findings(ext_comp, int_equity, pay_perf, fix_var, lab_cost):
 
 
 @report_bp.route('/<session_id>/export-pdf', methods=['GET'])
+@require_auth
 def export_pdf(session_id):
     """导出诊断报告 PDF"""
     from app.api.sessions import sessions_store

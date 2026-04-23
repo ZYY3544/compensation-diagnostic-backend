@@ -1,10 +1,12 @@
 from flask import Blueprint, jsonify, request, Response, stream_with_context
 import json
+from app.core.auth import require_auth
 
 chat_bp = Blueprint('chat', __name__)
 
 
 @chat_bp.route('/<session_id>', methods=['POST'])
+@require_auth
 def chat(session_id):
     """Non-streaming chat endpoint (fallback)"""
     from app.api.sessions import sessions_store
@@ -60,6 +62,7 @@ def _detect_module_navigation(message: str) -> str | None:
 
 
 @chat_bp.route('/<session_id>/extract', methods=['POST'])
+@require_auth
 def extract_interview_answer(session_id):
     """Extract structured info from free-text interview answer using AI"""
     from app.api.sessions import sessions_store
@@ -370,6 +373,7 @@ def extract_interview_answer(session_id):
 
 
 @chat_bp.route('/summary', methods=['POST'])
+@require_auth
 def generate_summary():
     """Q6 结束后，Sparky 对整个访谈做整体总结 + 预告下一步（review）"""
     data = request.json
@@ -411,6 +415,7 @@ def generate_summary():
 
 
 @chat_bp.route('/findings', methods=['POST'])
+@require_auth
 def generate_findings():
     """Generate key findings from interview notes"""
     data = request.json
@@ -437,6 +442,7 @@ def generate_findings():
 
 
 @chat_bp.route('/review', methods=['POST'])
+@require_auth
 def review_interview():
     """闭环 1：Sparky 自主修订访谈纪要（只做安全操作），然后告诉用户改了什么。
 
@@ -538,6 +544,7 @@ def review_interview():
 
 
 @chat_bp.route('/supplement', methods=['POST'])
+@require_auth
 def process_supplement():
     """处理用户在审阅阶段的补充信息：AI 判断归属到哪张卡片并更新 value"""
     data = request.json
@@ -638,6 +645,7 @@ def process_supplement():
 
 
 @chat_bp.route('/<session_id>/stream', methods=['POST'])
+@require_auth
 def chat_stream(session_id):
     """SSE streaming chat endpoint"""
     from app.api.sessions import sessions_store

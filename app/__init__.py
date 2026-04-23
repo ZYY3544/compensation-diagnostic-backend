@@ -41,7 +41,15 @@ def create_app():
             print(f'[after_request] session flush failed: {e}')
         return response
 
+    # 启动时初始化 DB（create_all，幂等）
+    try:
+        from app.core.db import init_db
+        init_db()
+    except Exception as e:
+        print(f'[startup] db init failed: {e}')
+
     # Register blueprints
+    from app.api.auth import auth_bp
     from app.api.sessions import sessions_bp
     from app.api.upload import upload_bp
     from app.api.chat import chat_bp
@@ -49,6 +57,7 @@ def create_app():
     from app.api.pipeline_steps import pipeline_bp
     from app.api.skill import skill_bp
 
+    app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(sessions_bp, url_prefix='/api/sessions')
     app.register_blueprint(upload_bp, url_prefix='/api/upload')
     app.register_blueprint(chat_bp, url_prefix='/api/chat')

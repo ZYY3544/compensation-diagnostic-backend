@@ -1,8 +1,9 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, g
 import uuid
 import json
 from datetime import datetime
 from app.storage.session_proxy import SessionsStore
+from app.core.auth import require_auth
 
 sessions_bp = Blueprint('sessions', __name__)
 
@@ -33,16 +34,34 @@ def _generate_welcome():
         return '你好！我是 Sparky，你的 AI 薪酬诊断助手。先简单介绍下你们公司吧？'
 
 
+def _get_owned_session(session_id):
+    """获取属于当前 workspace 的 session；不存在返回 (None, 404)，越权返回 (None, 403)"""
+    session = sessions_store.get(session_id)
+    if not session:
+        return None, ('Session not found', 404)
+    ws = session.get('workspace_id')
+    # 兼容历史无 workspace_id 的 session：当前请求 workspace 拿过的会话直接挂上
+    if ws is None:
+        session['workspace_id'] = g.workspace_id
+        return session, None
+    if ws != g.workspace_id:
+        return None, ('forbidden', 403)
+    return session, None
+
+
 @sessions_bp.route('/', methods=['POST'])
+@require_auth
 def create_session():
     """Create a new diagnostic session + DataSnapshot（持久化）"""
     session_id = str(uuid.uuid4())
     now = datetime.utcnow().isoformat()
 
-    # 建 session（legacy）
+    # 建 session（legacy）+ 关联当前用户的 workspace
     sessions_store[session_id] = {
         'id': session_id,
         'snapshot_id': session_id,   # session_id == snapshot_id（一次诊断 = 一次快照）
+        'workspace_id': g.workspace_id,
+        'user_id': g.user_id,
         'status': 'created',
         'created_at': now,
         'employee_count': 0,
@@ -54,21 +73,19 @@ def create_session():
         'analysis_results': None,
     }
 
-    # 同步建 DataSnapshot（空壳，后续 upload/analyze 填充）
+    # 同步建 DataSnapshot
     try:
         from app.storage import get_storage
         storage = get_storage()
-        # 默认 user_id：先用 session_id 自身。等接真实用户系统再改
-        user_id = 'anon_' + session_id[:8]
         storage.save_user({
-            'user_id': user_id,
+            'user_id': g.user_id,
             'org_name': None,
             'role': None,
             'created_at': now,
         })
         storage.save_snapshot({
             'snapshot_id': session_id,
-            'user_id': user_id,
+            'user_id': g.user_id,
             'uploaded_at': now,
             'status': 'draft',
         })
@@ -80,30 +97,33 @@ def create_session():
     return jsonify(resp), 201
 
 @sessions_bp.route('/<session_id>', methods=['GET'])
+@require_auth
 def get_session(session_id):
     """Get session details and current status"""
-    session = sessions_store.get(session_id)
-    if not session:
-        return jsonify({'error': 'Session not found'}), 404
+    session, err = _get_owned_session(session_id)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
     return jsonify(session)
 
 @sessions_bp.route('/<session_id>/status', methods=['GET'])
+@require_auth
 def get_status(session_id):
     """Poll session status"""
-    session = sessions_store.get(session_id)
-    if not session:
-        return jsonify({'error': 'Session not found'}), 404
+    session, err = _get_owned_session(session_id)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
     return jsonify({
         'status': session['status'],
         'employee_count': session.get('employee_count', 0),
     })
 
 @sessions_bp.route('/<session_id>/confirm', methods=['POST'])
+@require_auth
 def confirm_step(session_id):
     """Confirm a step (tax choice, grade mapping, function matching, etc.)"""
-    session = sessions_store.get(session_id)
-    if not session:
-        return jsonify({'error': 'Session not found'}), 404
+    session, err = _get_owned_session(session_id)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
 
     data = request.json
     step = data.get('step')

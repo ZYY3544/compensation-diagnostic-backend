@@ -12,11 +12,13 @@ from flask import Blueprint, jsonify, request
 from app.skills import get_registry
 from app.services.intent_router import classify_intent
 from app.models import new_id, now_iso
+from app.core.auth import require_auth
 
 skill_bp = Blueprint('skill', __name__)
 
 
 @skill_bp.route('/registry', methods=['GET'])
+@require_auth
 def get_registry_endpoint():
     """返回所有有 chip_label 的能力，供前端欢迎页展示"""
     registry = get_registry()
@@ -37,6 +39,7 @@ def get_registry_endpoint():
 
 
 @skill_bp.route('/classify-intent', methods=['POST'])
+@require_auth
 def classify():
     """意图识别：用户消息 → skill_key"""
     data = request.json or {}
@@ -47,6 +50,7 @@ def classify():
 
 
 @skill_bp.route('/invoke', methods=['POST'])
+@require_auth
 def invoke():
     """
     调用一个 skill。

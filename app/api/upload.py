@@ -8,11 +8,14 @@
 """
 from flask import Blueprint, jsonify, request, current_app, send_file
 import os
+from app.core.auth import require_auth
+from app.api._session_helpers import owned_session_or_403
 
 upload_bp = Blueprint('upload', __name__)
 
 
 @upload_bp.route('/template', methods=['GET'])
+@require_auth
 def download_template():
     """下载标准模板 xlsx"""
     # static 目录挂在 app 根目录平级
@@ -29,6 +32,7 @@ def download_template():
 
 
 @upload_bp.route('/<session_id>', methods=['POST'])
+@require_auth
 def upload_file(session_id):
     """
     上传 Excel。
@@ -36,11 +40,9 @@ def upload_file(session_id):
       - 对得上 → 直接跑完整 pipeline，返回 ParseResult（前端进数据确认）
       - 对不上 → 返回 mapping_needed:true + AI 字段映射建议（前端进字段映射确认页）
     """
-    from app.api.sessions import sessions_store
-
-    session = sessions_store.get(session_id)
-    if not session:
-        return jsonify({'error': 'Session not found'}), 404
+    session, err = owned_session_or_403(session_id)
+    if err:
+        return err
 
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
@@ -107,6 +109,7 @@ def upload_file(session_id):
 
 
 @upload_bp.route('/<session_id>/confirm-mapping', methods=['POST'])
+@require_auth
 def confirm_mapping(session_id):
     """
     Path B 的第二步：用户在字段映射面板确认后调这个。
@@ -114,13 +117,12 @@ def confirm_mapping(session_id):
     把 standard_key → user_column 的映射转成 pipeline 熟悉的 old-key → user_column 格式，
     然后跑完整 pipeline 返回 ParseResult。
     """
-    from app.api.sessions import sessions_store
     from app.services.standard_fields import PIPELINE_KEY_ALIAS
     from app.services.pipeline import run_upload_pipeline
 
-    session = sessions_store.get(session_id)
-    if not session:
-        return jsonify({'error': 'Session not found'}), 404
+    session, err = owned_session_or_403(session_id)
+    if err:
+        return err
 
     file_path = session.get('upload_file_path')
     if not file_path or not os.path.exists(file_path):
