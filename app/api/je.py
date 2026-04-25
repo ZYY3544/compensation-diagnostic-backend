@@ -29,6 +29,7 @@ from app.services.je_batch import (
 )
 from app.services.je_match import match_employees_to_jobs
 from app.services.je_library import generate_library
+from app.services.je_compare import parse_legacy_excel, compare_to_jobs
 from app.tools.je.anomaly import detect_anomalies
 
 je_bp = Blueprint('je', __name__)
@@ -515,6 +516,58 @@ def match_to_session():
     result = match_employees_to_jobs(employees, serialized, grade_mapping=grade_mapping)
     result['session_id'] = session.get('id')
     return jsonify(result)
+
+
+@je_bp.route('/compare', methods=['POST'])
+@require_auth
+def compare_legacy_system():
+    """
+    上传现行职级体系 Excel，跟当前 workspace 的 AI 评估岗位做对比。
+
+    multipart/form-data, file 字段。Excel 至少含"岗位名"+"职级"两列。
+    职级支持 G12 / 12 / Hay 12 这类含数字格式；P 序列等需要用户先换算。
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'file_required'}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'error': 'empty_file'}), 400
+
+    with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+        f.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        legacy_rows, parse_errors = parse_legacy_excel(tmp_path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    if not legacy_rows:
+        return jsonify({
+            'error': 'no_valid_rows',
+            'parse_errors': parse_errors,
+            'hint': 'Excel 至少需要"岗位名"和"职级"两列',
+        }), 400
+
+    db = SessionLocal()
+    try:
+        jobs = db.query(Job).filter_by(workspace_id=g.workspace_id).all()
+        serialized = [_serialize_job(j) for j in jobs]
+    finally:
+        db.close()
+
+    if not serialized:
+        return jsonify({
+            'error': 'no_jobs',
+            'hint': '当前 workspace 还没有 AI 评估的岗位，先评估几个再来对比',
+        }), 400
+
+    report = compare_to_jobs(legacy_rows, serialized)
+    report['parse_errors'] = parse_errors
+    return jsonify(report)
 
 
 @je_bp.route('/anomalies', methods=['GET'])

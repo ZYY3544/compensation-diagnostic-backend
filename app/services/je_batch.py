@@ -75,12 +75,19 @@ def _detect_columns(header: list[str]) -> dict[str, int]:
 
 def parse_batch_excel(file_path: str) -> tuple[list[dict], list[str]]:
     """
-    解析批量评估 Excel。
+    解析批量评估 Excel。路径 B 完整版：只有岗位名是必填，其他全可选。
+
+    字段处理逻辑：
+    - title    必填
+    - function 可选；缺失或非法 → 用 '通用职能' fallback，标记 function_inferred=True
+    - department 可选
+    - jd_text  可选；缺失 → 拼接伪 JD（仅供 LLM 提取 PK 用），标记 has_jd=False
+    - has_jd / function_inferred 透传给 _evaluate_one，最终写入 Job.result.confidence
 
     Returns:
         (rows, errors)
-        rows: [{title, function, department, jd_text}, ...]（已通过基础校验）
-        errors: 字符串列表，每条解释一行为什么被丢弃
+        rows: [{title, function, department, jd_text, has_jd, function_inferred}, ...]
+        errors: 字符串列表，每条解释一行为什么被丢弃（一般是缺岗位名）
     """
     wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
     ws = wb.active
@@ -91,40 +98,47 @@ def parse_batch_excel(file_path: str) -> tuple[list[dict], list[str]]:
     header = list(all_rows[0])
     mapping = _detect_columns(header)
 
-    missing = [k for k in ('title', 'function') if k not in mapping]
-    if missing:
-        readable = {'title': '岗位名', 'function': '业务职能'}
-        return [], [f'必填列未识别到：{"、".join(readable[k] for k in missing)}（表头需要包含相关关键词）']
+    if 'title' not in mapping:
+        return [], ['必填列未识别到：岗位名（表头需要包含"岗位"、"职位"、"title"等关键词）']
 
     rows: list[dict] = []
     errors: list[str] = []
     for line_no, raw in enumerate(all_rows[1:], start=2):
         title = _cell(raw, mapping.get('title'))
-        function = _cell(raw, mapping.get('function'))
+        function_raw = _cell(raw, mapping.get('function'))
         department = _cell(raw, mapping.get('department'))
-        jd_text = _cell(raw, mapping.get('jd_text'))
+        jd_text_raw = _cell(raw, mapping.get('jd_text'))
 
-        if not title and not function:
-            continue  # 整行空，跳过不报错
         if not title:
-            errors.append(f'第 {line_no} 行：缺少岗位名')
+            # 整行空跳过；只有 title 缺失才报错
+            if any([function_raw, department, jd_text_raw]):
+                errors.append(f'第 {line_no} 行：缺少岗位名')
             continue
-        if not function:
-            errors.append(f'第 {line_no} 行（{title}）：缺少业务职能')
-            continue
-        if not is_valid_function(function):
-            errors.append(f'第 {line_no} 行（{title}）：业务职能 "{function}" 不在可选范围')
-            continue
-        if not jd_text:
-            # JD 缺失不阻断 —— 评估会基于职位名 + 职能给一个低置信度结果，
-            # 后续单岗位详情里 HR 可以补 JD 重评
-            jd_text = f'（未提供详细 JD）岗位名称：{title}，业务职能：{function}'
+
+        # function 缺失 / 非法 → fallback "通用职能"，标记需要 LLM 推断或仅依赖名称
+        function_inferred = False
+        if not function_raw or not is_valid_function(function_raw):
+            function = '通用职能'
+            function_inferred = True
+        else:
+            function = function_raw.strip()
+
+        # JD 缺失 → 用伪 JD 让 LLM 仍可提取 PK，但标记 confidence='low'
+        has_jd = bool(jd_text_raw and len(jd_text_raw.strip()) >= 20)
+        if has_jd:
+            jd_text = jd_text_raw.strip()
+        else:
+            jd_text = f'（未提供详细 JD，请基于岗位名和职能做最佳推断）\n岗位名称：{title}\n业务职能：{function}'
+            if department:
+                jd_text += f'\n所属部门：{department}'
 
         rows.append({
             'title': title.strip(),
-            'function': function.strip(),
+            'function': function,
             'department': (department or '').strip() or None,
-            'jd_text': jd_text.strip(),
+            'jd_text': jd_text,
+            'has_jd': has_jd,
+            'function_inferred': function_inferred,
         })
     return rows, errors
 
@@ -149,6 +163,8 @@ def create_batch(workspace_id: str, rows: list[dict]) -> str:
                 'function': r['function'],
                 'department': r.get('department'),
                 'jd_text': r['jd_text'],
+                'has_jd': r.get('has_jd', True),
+                'function_inferred': r.get('function_inferred', False),
                 'status': 'pending',          # pending | running | done | failed
                 'job_id': None,
                 'model_used': None,
@@ -242,6 +258,12 @@ def _evaluate_one(workspace_id: str, item: dict, model: Optional[str]) -> dict:
         traceback.print_exc()
         return {'status': 'failed', 'error': str(e)[:500]}
 
+    # 写入路径 B 的来源标记 + 置信度，让前端知道每条岗位的评估深度
+    result_dict = {k: v for k, v in eval_result.items() if k != 'factors'}
+    result_dict['source'] = 'list'
+    result_dict['confidence'] = 'high' if item.get('has_jd') else 'low'
+    result_dict['function_inferred'] = bool(item.get('function_inferred'))
+
     db = SessionLocal()
     try:
         job = Job(
@@ -249,9 +271,9 @@ def _evaluate_one(workspace_id: str, item: dict, model: Optional[str]) -> dict:
             title=item['title'],
             department=item.get('department'),
             function=item['function'],
-            jd_text=item['jd_text'],
+            jd_text=item['jd_text'] if item.get('has_jd') else '',
             factors=eval_result['factors'],
-            result={k: v for k, v in eval_result.items() if k != 'factors'},
+            result=result_dict,
         )
         db.add(job)
         db.commit()
@@ -342,6 +364,8 @@ def serialize_batch(batch: JobBatch) -> dict:
                 'title': it.get('title'),
                 'function': it.get('function'),
                 'department': it.get('department'),
+                'has_jd': it.get('has_jd', True),
+                'function_inferred': it.get('function_inferred', False),
                 'status': it.get('status'),
                 'job_id': it.get('job_id'),
                 'model_used': it.get('model_used'),
