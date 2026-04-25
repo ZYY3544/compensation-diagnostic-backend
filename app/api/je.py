@@ -30,6 +30,7 @@ from app.services.je_batch import (
 from app.services.je_match import match_employees_to_jobs
 from app.services.je_library import generate_library
 from app.services.je_compare import parse_legacy_excel, compare_to_jobs
+from app.services.je_grade_adjust import adjust_to_target_grade
 from app.tools.je.anomaly import detect_anomalies
 
 je_bp = Blueprint('je', __name__)
@@ -384,6 +385,72 @@ def update_factors(job_id: str):
         db.commit()
         db.refresh(job)
         return jsonify({'job': _serialize_job(job)})
+    finally:
+        db.close()
+
+
+@je_bp.route('/jobs/<job_id>/grade', methods=['PATCH'])
+@require_auth
+def adjust_grade(job_id: str):
+    """
+    用户在图谱里拖拽岗位卡到新职级，后端反推 8 因子。
+
+    Body: { target_grade: int, department?: str }
+    department 可选 — 同时调整岗位部门归属（例如把岗位拖到另一部门列）
+
+    返回 {job, achieved, diff, changed_factors}：
+    - achieved=true 表示精确命中目标职级
+    - diff 表示最终职级跟 target 的差距（可能是 0/1/2，越界时会大）
+    - changed_factors 列出哪些因子档位被调整了
+    """
+    data = request.json or {}
+    target_grade = data.get('target_grade')
+    if not isinstance(target_grade, int):
+        return jsonify({'error': 'target_grade_required',
+                        'hint': 'target_grade 必须是整数（如 12 表示 G12）'}), 400
+    if target_grade < 1 or target_grade > 30:
+        return jsonify({'error': 'target_grade_out_of_range',
+                        'hint': 'Hay 标准职级范围 1-30'}), 400
+
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter_by(id=job_id, workspace_id=g.workspace_id).first()
+        if not job:
+            return jsonify({'error': 'not_found'}), 404
+
+        current_factors = job.factors or {}
+        if not current_factors:
+            return jsonify({'error': 'no_factors',
+                            'hint': '岗位还没有 8 因子数据，无法反推。请先评估或从库添加。'}), 400
+
+        adjusted = adjust_to_target_grade(current_factors, target_grade)
+
+        # 保留来源标记，加 verified=True (拖拽视为用户主动校准)
+        prev_result = job.result or {}
+        new_result = dict(adjusted['result'])
+        for keep in ('source', 'lib_id', 'lib_factors', 'pk_reasoning', 'candidates', 'confidence', 'function_inferred'):
+            if keep in prev_result:
+                new_result[keep] = prev_result[keep]
+        new_result['verified'] = True
+        new_result['adjusted_via'] = 'drag_drop'
+        new_result['target_grade'] = target_grade
+        new_result['achieved'] = adjusted['achieved']
+
+        job.factors = adjusted['factors']
+        job.result = new_result
+        # 可选：同时改部门
+        new_dept = data.get('department')
+        if new_dept and new_dept.strip() != (job.department or ''):
+            job.department = new_dept.strip()
+
+        db.commit()
+        db.refresh(job)
+        return jsonify({
+            'job': _serialize_job(job),
+            'achieved': adjusted['achieved'],
+            'diff': adjusted['diff'],
+            'changed_factors': adjusted['changed_factors'],
+        })
     finally:
         db.close()
 
