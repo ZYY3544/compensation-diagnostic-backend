@@ -8,13 +8,24 @@ GET    /api/je/jobs/<id>             岗位详情
 PATCH  /api/je/jobs/<id>/jd          更新 JD 并重新评估  {jd_text}
 PATCH  /api/je/jobs/<id>/factors     手改 8 因子重算（不调 LLM）  {factors: {...}}
 DELETE /api/je/jobs/<id>             删除岗位
+
+POST   /api/je/batches               批量评估：上传 Excel，立即返回 batch_id 供轮询
+GET    /api/je/batches/<id>          查询批次状态 + 每行进度
+GET    /api/je/batches               列出当前 workspace 的所有批次（最近优先）
+GET    /api/je/anomalies             返回当前岗位库的职级异常告警（倒挂 / 膨胀 / 断层）
 """
+import os
+import tempfile
 from flask import Blueprint, request, jsonify, g
 from app.core.db import SessionLocal
-from app.core.models import Job
+from app.core.models import Job, JobBatch
 from app.core.auth import require_auth
 from app.tools.je.function_catalog import FUNCTION_CATALOG, is_valid_function
 from app.tools.je.evaluator import evaluate_job, evaluate_with_factors
+from app.services.je_batch import (
+    parse_batch_excel, create_batch, start_batch_async, serialize_batch,
+)
+from app.tools.je.anomaly import detect_anomalies
 
 je_bp = Blueprint('je', __name__)
 
@@ -191,5 +202,111 @@ def delete_job(job_id: str):
         db.delete(job)
         db.commit()
         return jsonify({'ok': True})
+    finally:
+        db.close()
+
+
+# ============================================================================
+# 批量评估
+# ============================================================================
+
+@je_bp.route('/batches', methods=['POST'])
+@require_auth
+def create_batch_endpoint():
+    """
+    上传一个 Excel，启动批量评估。
+    multipart/form-data, file 字段名 'file'。
+
+    立即返回 batch_id；评估在后台跑，前端轮询 GET /batches/<id>。
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'file_required', 'hint': '需要在 multipart 里附 file 字段'}), 400
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({'error': 'empty_file'}), 400
+
+    # 写到临时文件让 openpyxl 解析（read_only 模式需要文件路径）
+    with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+        f.save(tmp.name)
+        tmp_path = tmp.name
+
+    try:
+        rows, parse_errors = parse_batch_excel(tmp_path)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    if not rows:
+        return jsonify({
+            'error': 'no_valid_rows',
+            'parse_errors': parse_errors,
+            'hint': 'Excel 需要至少包含 "岗位名" 和 "业务职能" 两列',
+        }), 400
+
+    batch_id = create_batch(g.workspace_id, rows)
+    start_batch_async(batch_id)
+    return jsonify({
+        'batch_id': batch_id,
+        'total': len(rows),
+        'parse_errors': parse_errors,
+    }), 202
+
+
+@je_bp.route('/batches/<batch_id>', methods=['GET'])
+@require_auth
+def get_batch(batch_id: str):
+    db = SessionLocal()
+    try:
+        batch = db.query(JobBatch).filter_by(id=batch_id, workspace_id=g.workspace_id).first()
+        if not batch:
+            return jsonify({'error': 'not_found'}), 404
+        return jsonify({'batch': serialize_batch(batch)})
+    finally:
+        db.close()
+
+
+@je_bp.route('/anomalies', methods=['GET'])
+@require_auth
+def list_anomalies():
+    """返回当前 workspace 的所有岗位职级异常（倒挂 / 膨胀 / 断层）。"""
+    db = SessionLocal()
+    try:
+        jobs = db.query(Job).filter_by(workspace_id=g.workspace_id).all()
+        serialized = [_serialize_job(j) for j in jobs]
+        anomalies = detect_anomalies(serialized)
+        return jsonify({
+            'anomalies': anomalies,
+            'job_count': len(jobs),
+        })
+    finally:
+        db.close()
+
+
+@je_bp.route('/batches', methods=['GET'])
+@require_auth
+def list_batches():
+    db = SessionLocal()
+    try:
+        batches = (db.query(JobBatch)
+                   .filter_by(workspace_id=g.workspace_id)
+                   .order_by(JobBatch.created_at.desc())
+                   .limit(50)
+                   .all())
+        return jsonify({
+            'batches': [
+                {
+                    'id': b.id,
+                    'status': b.status,
+                    'total': b.total,
+                    'completed': b.completed,
+                    'failed': b.failed,
+                    'created_at': b.created_at.isoformat() if b.created_at else None,
+                    'finished_at': b.finished_at.isoformat() if b.finished_at else None,
+                }
+                for b in batches
+            ]
+        })
     finally:
         db.close()

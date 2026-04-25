@@ -36,15 +36,24 @@ class _PKLLMAdapter:
         }
 
 
-# 单例引擎（validation_rules 是模块级单例，引擎本身轻量）
-_engine: Optional[IncrementalConvergence] = None
+# 默认单例（不指定 model 时用，跟启动时配置的 OPENROUTER_MODEL 走）
+_default_engine: Optional[IncrementalConvergence] = None
 
 
 def _get_engine(model: Optional[str] = None) -> IncrementalConvergence:
-    global _engine
-    if _engine is None:
-        _engine = IncrementalConvergence(validation_rules, llm_service=_PKLLMAdapter(model=model))
-    return _engine
+    """
+    返回引擎实例。
+    - model=None：用默认单例（OPENROUTER_MODEL）
+    - model 显式指定：每次新建一个引擎，因为 _PKLLMAdapter 在 __init__ 里固化了 model；
+      复用单例会让"批量评估时跨岗位负载均衡到不同模型"失效（之前的 bug）。
+      新建成本可忽略：validation_rules 是模块级单例，引擎本身只是几个字段。
+    """
+    global _default_engine
+    if model is not None:
+        return IncrementalConvergence(validation_rules, llm_service=_PKLLMAdapter(model=model))
+    if _default_engine is None:
+        _default_engine = IncrementalConvergence(validation_rules, llm_service=_PKLLMAdapter())
+    return _default_engine
 
 
 def evaluate_job(jd_text: str, job_title: str, function: str, model: Optional[str] = None) -> dict:

@@ -73,3 +73,33 @@ class Job(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class JobBatch(Base):
+    """
+    批量岗位评估任务。一次 Excel 上传产生一个 batch，里面 N 个岗位并行评估。
+
+    设计要点：
+    - items 用 JSON 列存所有行的状态（title/function/department/jd_text/status/error/job_id/model_used），
+      避免再开一张 BatchItem 表，简化查询。批量典型 50-200 行，单行 JSON 几 KB，整批 < 1 MB 没问题。
+    - status: queued | running | completed | failed
+      - completed = 全部跑完（含部分失败）
+      - failed = 整个 batch 异常退出（如所有 LLM 调用都挂了）
+    - 模型一致性：每个 item 内的所有 LLM 调用用同一个 model（写在 item.model_used），
+      不同 item 之间用 round-robin 跨多个备选模型，避免单点和速率限制。
+    """
+    __tablename__ = 'job_batches'
+
+    id = Column(String, primary_key=True, default=lambda: _gen_id('jb'))
+    workspace_id = Column(String, ForeignKey('workspaces.id'), nullable=False, index=True)
+
+    status = Column(String, nullable=False, default='queued')
+    total = Column(Integer, nullable=False, default=0)
+    completed = Column(Integer, nullable=False, default=0)
+    failed = Column(Integer, nullable=False, default=0)
+
+    items = Column(JSON, nullable=False, default=list)
+    error = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    finished_at = Column(DateTime, nullable=True)
