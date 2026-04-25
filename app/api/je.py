@@ -25,6 +25,7 @@ from app.tools.je.evaluator import evaluate_job, evaluate_with_factors
 from app.services.je_batch import (
     parse_batch_excel, create_batch, start_batch_async, serialize_batch,
 )
+from app.services.je_match import match_employees_to_jobs
 from app.tools.je.anomaly import detect_anomalies
 
 je_bp = Blueprint('je', __name__)
@@ -265,6 +266,60 @@ def get_batch(batch_id: str):
         return jsonify({'batch': serialize_batch(batch)})
     finally:
         db.close()
+
+
+@je_bp.route('/match', methods=['GET'])
+@require_auth
+def match_to_session():
+    """
+    人岗匹配：取一个 session 的员工数据，跟当前 workspace 的 JE 岗位库连起来。
+
+    Query: ?session_id=<id>
+
+    没传 session_id 时尝试取当前 workspace 最新一个有员工数据的 session 兜底。
+    """
+    session_id = request.args.get('session_id', '').strip()
+
+    from app.api.sessions import sessions_store
+
+    if not session_id:
+        return jsonify({
+            'error': 'session_id_required',
+            'hint': '请在主诊断里复制当前 session_id（浏览器 URL 或 localStorage 里都能看到），粘贴到上方输入框后再做人岗匹配。',
+        }), 400
+
+    session = sessions_store.get(session_id)
+    if not session:
+        return jsonify({'error': 'session_not_found', 'session_id': session_id}), 404
+    if session.get('workspace_id') and session['workspace_id'] != g.workspace_id:
+        return jsonify({'error': 'forbidden'}), 403
+
+    employees = session.get('cleaned_employees') or session.get('_employees') or []
+    if not employees:
+        return jsonify({
+            'error': 'session_has_no_employees',
+            'session_id': session.get('id'),
+            'hint': '这个 session 还没有解析出员工数据。请先完成主诊断的数据上传 + 字段映射。',
+        }), 400
+
+    grade_mapping = (session.get('_grade_match_result') or {}).get('grade_mapping') or {}
+
+    db = SessionLocal()
+    try:
+        jobs = db.query(Job).filter_by(workspace_id=g.workspace_id).all()
+        serialized = [_serialize_job(j) for j in jobs]
+    finally:
+        db.close()
+
+    if not serialized:
+        return jsonify({
+            'error': 'no_jobs',
+            'hint': '当前 workspace 还没有 JE 岗位。请先批量上传或单评几个岗位。',
+        }), 400
+
+    result = match_employees_to_jobs(employees, serialized, grade_mapping=grade_mapping)
+    result['session_id'] = session.get('id')
+    return jsonify(result)
 
 
 @je_bp.route('/anomalies', methods=['GET'])
