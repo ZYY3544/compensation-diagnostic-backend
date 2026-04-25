@@ -16,9 +16,11 @@ GET    /api/je/anomalies             返回当前岗位库的职级异常告警�
 """
 import os
 import tempfile
+import traceback
+from datetime import datetime
 from flask import Blueprint, request, jsonify, g
 from app.core.db import SessionLocal
-from app.core.models import Job, JobBatch
+from app.core.models import Job, JobBatch, JeProfile
 from app.core.auth import require_auth
 from app.tools.je.function_catalog import FUNCTION_CATALOG, is_valid_function
 from app.tools.je.evaluator import evaluate_job, evaluate_with_factors
@@ -26,6 +28,7 @@ from app.services.je_batch import (
     parse_batch_excel, create_batch, start_batch_async, serialize_batch,
 )
 from app.services.je_match import match_employees_to_jobs
+from app.services.je_library import generate_library
 from app.tools.je.anomaly import detect_anomalies
 
 je_bp = Blueprint('je', __name__)
@@ -43,6 +46,113 @@ def _serialize_job(j: Job) -> dict:
         'created_at': j.created_at.isoformat() if j.created_at else None,
         'updated_at': j.updated_at.isoformat() if j.updated_at else None,
     }
+
+
+# ============================================================================
+# 组织画像 + AI 岗位库
+# ============================================================================
+
+@je_bp.route('/profile', methods=['GET'])
+@require_auth
+def get_profile():
+    """返回当前 workspace 的组织画像 + 岗位库（如果已经访谈过）。没有就返回 null。"""
+    db = SessionLocal()
+    try:
+        prof = db.query(JeProfile).filter_by(workspace_id=g.workspace_id).first()
+        if not prof:
+            return jsonify({'profile': None, 'library': None})
+        return jsonify({
+            'profile': prof.profile_data,
+            'library': prof.library_data,
+            'created_at': prof.created_at.isoformat() if prof.created_at else None,
+            'updated_at': prof.updated_at.isoformat() if prof.updated_at else None,
+        })
+    finally:
+        db.close()
+
+
+@je_bp.route('/profile', methods=['PUT'])
+@require_auth
+def save_profile():
+    """
+    保存（或更新）当前 workspace 的组织画像。
+    Body: { industry, headcount, departments[], layers[], department_layers?, existing_grade_system? }
+
+    重新写画像不会清掉 library_data —— library 由 /library/generate 显式触发更新。
+    """
+    data = request.json or {}
+    profile_data = {
+        'industry': (data.get('industry') or '').strip() or None,
+        'headcount': data.get('headcount'),
+        'departments': data.get('departments') or [],
+        'layers': data.get('layers') or [],
+        'department_layers': data.get('department_layers') or {},
+        'existing_grade_system': (data.get('existing_grade_system') or '').strip() or None,
+    }
+
+    db = SessionLocal()
+    try:
+        prof = db.query(JeProfile).filter_by(workspace_id=g.workspace_id).first()
+        if prof:
+            prof.profile_data = profile_data
+        else:
+            prof = JeProfile(workspace_id=g.workspace_id, profile_data=profile_data)
+            db.add(prof)
+        db.commit()
+        db.refresh(prof)
+        return jsonify({
+            'profile': prof.profile_data,
+            'library': prof.library_data,
+        })
+    finally:
+        db.close()
+
+
+@je_bp.route('/library/generate', methods=['POST'])
+@require_auth
+def generate_library_endpoint():
+    """
+    根据当前 workspace 的组织画像调 LLM 生成 20-40 个推荐岗位。
+    必须先 PUT /profile 写好画像，才能调这个端点。
+
+    返回的 library 已经写入 DB，前端拿到后展示在岗位库面板。
+    """
+    db = SessionLocal()
+    try:
+        prof = db.query(JeProfile).filter_by(workspace_id=g.workspace_id).first()
+        if not prof or not prof.profile_data:
+            return jsonify({
+                'error': 'profile_required',
+                'hint': '需要先完成组织画像访谈（PUT /api/je/profile）才能生成岗位库。',
+            }), 400
+
+        try:
+            library = generate_library(prof.profile_data)
+        except Exception as e:
+            traceback.print_exc()
+            return jsonify({'error': 'generation_failed', 'reason': str(e)[:300]}), 500
+
+        prof.library_data = library
+        prof.updated_at = datetime.utcnow()
+        db.commit()
+        db.refresh(prof)
+        return jsonify({'library': prof.library_data})
+    finally:
+        db.close()
+
+
+@je_bp.route('/library', methods=['GET'])
+@require_auth
+def get_library():
+    """直接返回当前 workspace 已生成的岗位库（不重新调 LLM）。"""
+    db = SessionLocal()
+    try:
+        prof = db.query(JeProfile).filter_by(workspace_id=g.workspace_id).first()
+        if not prof or not prof.library_data:
+            return jsonify({'library': None})
+        return jsonify({'library': prof.library_data})
+    finally:
+        db.close()
 
 
 @je_bp.route('/functions', methods=['GET'])

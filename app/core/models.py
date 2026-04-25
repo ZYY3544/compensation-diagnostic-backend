@@ -75,6 +75,52 @@ class Job(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class JeProfile(Base):
+    """
+    JE 组织画像 + AI 岗位库（每个 workspace 一份）。
+
+    数据流：
+      Step 0 访谈 → 写入 profile_data（行业/规模/部门/管理层级/现有职级体系）
+      Step 1 触发生成 → LLM 单次调用 → 写入 library_data（20-40 个推荐岗位）
+      Step 1 用户从库选岗 → 落入 jobs 表（一份岗位库可被多次选用，库本身不变）
+
+    存储取舍：
+    - profile_data 和 library_data 都用 JSON 列存（写一次读多次，不需要关系查询）
+    - 每个 workspace 最多 1 份 profile（在 access 层用 workspace_id 唯一约束保证），
+      重新生成会覆盖 library_data 但保留已建岗位（jobs 表独立）
+    """
+    __tablename__ = 'je_profiles'
+
+    id = Column(String, primary_key=True, default=lambda: _gen_id('jep'))
+    workspace_id = Column(String, ForeignKey('workspaces.id'), nullable=False, unique=True, index=True)
+
+    profile_data = Column(JSON, nullable=True)
+    # 形如:
+    # {
+    #   'industry': '互联网',
+    #   'headcount': 200,
+    #   'departments': ['产品部', '技术部', '市场部', 'HR部', '财务部'],
+    #   'layers': ['CEO', 'VP', '总监', '经理', '专员'],
+    #   'department_layers': {'产品部': ['CEO', 'VP', '总监', '经理', '专员'], ...},
+    #   'existing_grade_system': 'P1-P10' 或 null,
+    # }
+
+    library_data = Column(JSON, nullable=True)
+    # 形如:
+    # {
+    #   'entries': [
+    #     {'id': 'lib_xxx', 'name': '产品经理', 'department': '产品部', 'function': '产品管理',
+    #      'hay_grade': 12, 'factors': {...8 因子...}, 'responsibilities': ['...']},
+    #     ...
+    #   ],
+    #   'generated_at': '2026-04-25T...',
+    #   'model_used': 'openai/gpt-5.4-mini',
+    # }
+
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class JobBatch(Base):
     """
     批量岗位评估任务。一次 Excel 上传产生一个 batch，里面 N 个岗位并行评估。
