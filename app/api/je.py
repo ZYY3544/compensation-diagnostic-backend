@@ -162,6 +162,77 @@ def list_functions():
     return jsonify({'catalog': FUNCTION_CATALOG})
 
 
+@je_bp.route('/jobs/from-library', methods=['POST'])
+@require_auth
+def create_job_from_library():
+    """
+    从 AI 岗位库的某个 entry 创建一个 Job 记录。
+
+    Body: {
+      lib_id: 'lib_3',                 # library_data.entries[].id
+      title?: '产品经理-用户增长方向',  # 可选，覆盖 entry.name
+      department?: '产品部',           # 可选，覆盖 entry.department
+    }
+
+    后端用 entry 自带的 8 因子调 evaluate_with_factors 算分数 + 职级，
+    存到 jobs 表（不调 LLM，毫秒级）。新建岗位的 jd_text 留空字符串
+    （表示从库选的，没有 JD），后续用户可在详情页补 JD 触发精细评估。
+    """
+    data = request.json or {}
+    lib_id = (data.get('lib_id') or '').strip()
+    if not lib_id:
+        return jsonify({'error': 'lib_id_required'}), 400
+
+    db = SessionLocal()
+    try:
+        prof = db.query(JeProfile).filter_by(workspace_id=g.workspace_id).first()
+        if not prof or not prof.library_data:
+            return jsonify({'error': 'library_not_found',
+                            'hint': '当前 workspace 还没有生成岗位库，请先完成访谈。'}), 400
+
+        entries = (prof.library_data or {}).get('entries') or []
+        entry = next((e for e in entries if e.get('id') == lib_id), None)
+        if not entry:
+            return jsonify({'error': 'lib_entry_not_found', 'lib_id': lib_id}), 404
+
+        title = (data.get('title') or entry.get('name') or '').strip()
+        department = (data.get('department') or entry.get('department') or '').strip() or None
+        function = entry.get('function') or '通用职能'
+        if not title:
+            return jsonify({'error': 'title_required'}), 400
+        if not is_valid_function(function):
+            function = '通用职能'
+
+        factors = entry.get('factors') or {}
+        try:
+            scored = evaluate_with_factors(factors)
+        except Exception as e:
+            return jsonify({'error': 'invalid_factors', 'reason': str(e)[:300]}), 400
+
+        # 跟 evaluate_job 返回结构对齐：result 里去掉 factors（在 Job.factors 列已存）
+        result = {k: v for k, v in scored.items() if k != 'factors'}
+        # 标记来源信息，方便前端推断"待校准"状态（factors 跟 lib 完全一致 → 用户还没改过）
+        result['source'] = 'library'
+        result['lib_id'] = lib_id
+        result['lib_factors'] = dict(factors)   # 复制一份原始档位作为基线
+
+        job = Job(
+            workspace_id=g.workspace_id,
+            title=title,
+            department=department,
+            function=function,
+            jd_text='',   # 库选没 JD；用户后续可"上传 JD 精细评估"补
+            factors=factors,
+            result=result,
+        )
+        db.add(job)
+        db.commit()
+        db.refresh(job)
+        return jsonify({'job': _serialize_job(job)}), 201
+    finally:
+        db.close()
+
+
 @je_bp.route('/jobs', methods=['GET'])
 @require_auth
 def list_jobs():
@@ -293,8 +364,18 @@ def update_factors(job_id: str):
         except Exception as e:
             return jsonify({'error': 'evaluation_failed', 'reason': str(e)}), 400
 
+        # 保留来源标记（source / lib_id / lib_factors），让前端能区分
+        # "刚从库选的没改过" vs "用户校准过"两种状态
+        prev_result = job.result or {}
+        new_result = {k: v for k, v in eval_result.items() if k != 'factors'}
+        for keep in ('source', 'lib_id', 'lib_factors'):
+            if keep in prev_result:
+                new_result[keep] = prev_result[keep]
+        # 用户改过因子 → 标记 verified（前端"已校准"状态）
+        new_result['verified'] = True
+
         job.factors = eval_result['factors']
-        job.result = {k: v for k, v in eval_result.items() if k != 'factors'}
+        job.result = new_result
         db.commit()
         db.refresh(job)
         return jsonify({'job': _serialize_job(job)})
