@@ -269,6 +269,10 @@ def create_job():
     except Exception as e:
         return jsonify({'error': 'evaluation_failed', 'reason': str(e)}), 500
 
+    # 标记 source='single'，前端用来判断"路径 A 累积 5 个时触发升级提示"
+    result_dict = {k: v for k, v in eval_result.items() if k != 'factors'}
+    result_dict['source'] = 'single'
+
     db = SessionLocal()
     try:
         job = Job(
@@ -278,7 +282,7 @@ def create_job():
             function=function,
             jd_text=jd_text,
             factors=eval_result['factors'],
-            result={k: v for k, v in eval_result.items() if k != 'factors'},
+            result=result_dict,
         )
         db.add(job)
         db.commit()
